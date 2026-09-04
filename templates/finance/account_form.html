@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if object %}Editar conta{% else %}Nova conta{% endif %} | Financeiro OFX
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">
+            {% if object %}Editar conta{% else %}Nova conta{% endif %}
+        </h1>
+
+        <p class="text-secondary mb-0">
+            O ACCTID permitirá reconhecer automaticamente esta conta durante a importação OFX.
+        </p>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">
+                        {{ form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="row g-3">
+
+                    <div class="col-12 col-lg-6">
+                        <label
+                            for="{{ form.bank.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.bank.label }}
+                        </label>
+                        {{ form.bank }}
+                        {% for error in form.bank.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-lg-6">
+                        <label
+                            for="{{ form.nickname.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.nickname.label }}
+                        </label>
+                        {{ form.nickname }}
+                        {% for error in form.nickname.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label
+                            for="{{ form.branch.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.branch.label }}
+                        </label>
+                        {{ form.branch }}
+                        {% for error in form.branch.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-5">
+                        <label
+                            for="{{ form.number.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.number.label }}
+                        </label>
+                        {{ form.number }}
+                        {% for error in form.number.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-3">
+                        <label
+                            for="{{ form.digit.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.digit.label }}
+                        </label>
+                        {{ form.digit }}
+                        {% for error in form.digit.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label
+                            for="{{ form.account_type.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.account_type.label }}
+                        </label>
+                        {{ form.account_type }}
+                        {% for error in form.account_type.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-2">
+                        <label
+                            for="{{ form.currency.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.currency.label }}
+                        </label>
+                        {{ form.currency }}
+                        {% for error in form.currency.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label
+                            for="{{ form.ofx_account_id.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.ofx_account_id.label }}
+                        </label>
+                        {{ form.ofx_account_id }}
+                        {% for error in form.ofx_account_id.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <div class="form-check mt-2">
+                            {{ form.is_own_account }}
+                            <label
+                                for="{{ form.is_own_account.id_for_label }}"
+                                class="form-check-label"
+                            >
+                                {{ form.is_own_account.label }}
+                            </label>
+                            <div class="form-text">
+                                {{ form.is_own_account.help_text }}
+                            </div>
+                            {% for error in form.is_own_account.errors %}
+                                <div class="text-danger small mt-1">{{ error }}</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <div class="form-check mt-2">
+                            {{ form.is_active }}
+                            <label
+                                for="{{ form.is_active.id_for_label }}"
+                                class="form-check-label"
+                            >
+                                {{ form.is_active.label }}
+                            </label>
+                        </div>
+                    </div>
+
+                </div>
+
+                <hr class="my-4">
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        Salvar
+                    </button>
+
+                    <a
+                        href="{% url 'finance:account-list' %}"
+                        class="btn btn-outline-secondary"
+                    >
+                        Cancelar
+                    </a>
+                </div>
+            </form>
+
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,70 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ambiente virtual
+.venv/
+venv/
+
+# Variáveis e segredos
+.env
+.env.*
+!.env.example
+
+# Banco local / backups
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-*
+*.bak
+*.backup
+
+# Extratos, relatórios e exportações financeiras locais
+media/
+*.ofx
+*.qfx
+*.pdf
+*.csv
+*.xls
+*.xlsx
+*.ods
+
+# Static coletado para produção
+staticfiles/
+
+# Execução local
+logs/
+run/
+backups/
+
+# Relatórios internos de validação de versões
+VALIDACAO_ETAPA*.txt
+
+# Amostras locais não necessárias para iniciar o sistema
+samples/
+
+# Pacotes gerados
+*.zip
+dist/
+
+# Testes / cobertura
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDEs
+.vscode/
+.idea/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Credenciais / certificados locais
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Logs avulsos
+*.log

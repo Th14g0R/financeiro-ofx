@@ -1,0 +1,226 @@
+{% extends "base.html" %}
+{% load query_extras %}
+
+{% block title %}Contas | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Contas</h1>
+            <p class="text-secondary mb-0">
+                Contas bancárias cadastradas. Marque quais pertencem ao próprio titular.
+            </p>
+        </div>
+
+        <div>
+            <a
+                href="{% url 'finance:account-create' %}"
+                class="btn btn-primary"
+            >
+                Nova conta
+            </a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+
+                <div class="col-12 col-xl-3">
+                    <label for="q" class="form-label">Pesquisar</label>
+                    <input
+                        id="q"
+                        name="q"
+                        value="{{ query }}"
+                        class="form-control"
+                        placeholder="Apelido, banco, agência, conta ou ACCTID"
+                    >
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label for="bank" class="form-label">Banco</label>
+                    <select
+                        id="bank"
+                        name="bank"
+                        class="form-select"
+                    >
+                        <option value="">Todos</option>
+                        {% for bank in banks %}
+                            <option
+                                value="{{ bank.pk }}"
+                                {% if bank_filter == bank.pk|stringformat:"s" %}selected{% endif %}
+                            >
+                                {{ bank.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="ownership" class="form-label">
+                        Titularidade
+                    </label>
+                    <select
+                        id="ownership"
+                        name="ownership"
+                        class="form-select"
+                    >
+                        <option
+                            value="own"
+                            {% if ownership_filter == "own" %}selected{% endif %}
+                        >
+                            Minhas contas
+                        </option>
+                        <option
+                            value="other"
+                            {% if ownership_filter == "other" %}selected{% endif %}
+                        >
+                            Outras
+                        </option>
+                        <option
+                            value="all"
+                            {% if ownership_filter == "all" %}selected{% endif %}
+                        >
+                            Todas
+                        </option>
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="status" class="form-label">Situação</label>
+                    <select
+                        id="status"
+                        name="status"
+                        class="form-select"
+                    >
+                        <option value="active" {% if status_filter == "active" %}selected{% endif %}>
+                            Ativas
+                        </option>
+                        <option value="inactive" {% if status_filter == "inactive" %}selected{% endif %}>
+                            Inativas
+                        </option>
+                        <option value="all" {% if status_filter == "all" %}selected{% endif %}>
+                            Todas
+                        </option>
+                    </select>
+                </div>
+
+                <div class="col-12 col-xl-2 d-grid">
+                    <button class="btn btn-outline-secondary" type="submit">
+                        Filtrar
+                    </button>
+                </div>
+
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th><a class="table-sort-link" href="{% sort_url 'nickname' %}">Apelido <span class="sort-icon">{% sort_icon 'nickname' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'bank' %}">Banco <span class="sort-icon">{% sort_icon 'bank' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'branch' %}">Agência <span class="sort-icon">{% sort_icon 'branch' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'number' %}">Conta <span class="sort-icon">{% sort_icon 'number' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'type' %}">Tipo <span class="sort-icon">{% sort_icon 'type' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'ofx' %}">ACCTID OFX <span class="sort-icon">{% sort_icon 'ofx' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'ownership' %}">Titularidade <span class="sort-icon">{% sort_icon 'ownership' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'status' %}">Situação <span class="sort-icon">{% sort_icon 'status' %}</span></a></th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                {% for account in accounts %}
+                    <tr>
+                        <td class="fw-semibold">
+                            {{ account.nickname }}
+                        </td>
+
+                        <td>
+                            {{ account.bank.name }}
+                        </td>
+
+                        <td>
+                            {{ account.branch|default:"—" }}
+                        </td>
+
+                        <td>
+                            {{ account.formatted_number }}
+                        </td>
+
+                        <td>
+                            {{ account.get_account_type_display }}
+                        </td>
+
+                        <td>
+                            {{ account.ofx_account_id|default:"—" }}
+                        </td>
+
+                        <td>
+                            {% if account.is_own_account %}
+                                <span class="badge text-bg-primary">
+                                    Minha conta
+                                </span>
+                            {% else %}
+                                <span class="badge text-bg-light border text-dark">
+                                    Outra
+                                </span>
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {% if account.is_active %}
+                                <span class="badge text-bg-success">Ativa</span>
+                            {% else %}
+                                <span class="badge text-bg-secondary">Inativa</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="text-end text-nowrap">
+                            <a
+                                href="{% url 'finance:account-update' account.pk %}"
+                                class="btn btn-sm btn-outline-primary"
+                            >
+                                Editar
+                            </a>
+
+                            <form
+                                method="post"
+                                action="{% url 'finance:account-toggle-active' account.pk %}"
+                                class="d-inline"
+                            >
+                                {% csrf_token %}
+                                <button
+                                    type="submit"
+                                    class="btn btn-sm {% if account.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}"
+                                >
+                                    {% if account.is_active %}
+                                        Desativar
+                                    {% else %}
+                                        Ativar
+                                    {% endif %}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="9" class="text-center py-5 text-secondary">
+                            Nenhuma conta encontrada.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% include "finance/includes/pagination.html" %}
+    </div>
+
+</div>
+{% endblock %}

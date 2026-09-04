@@ -1,0 +1,8 @@
+Django>=5.2,<5.3
+python-dotenv>=1.2,<2
+ofx-br>=0.1,<0.2
+waitress>=3.0.2,<4
+whitenoise>=6.12,<7
+PyMuPDF>=1.27,<2
+requests>=2.32,<3
+cryptography>=48,<51

@@ -1,0 +1,311 @@
+{% extends "base.html" %}
+{% load query_extras finance_extras %}
+
+{% block title %}{{ counterparty.display_name }} | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <a
+                href="{% url 'finance:counterparty-list' %}"
+                class="small text-decoration-none"
+            >
+                ← Pessoas / contrapartes
+            </a>
+
+            <h1 class="h3 mb-1 mt-2">
+                {{ counterparty.display_name }}
+            </h1>
+
+            <p class="text-secondary mb-0">
+                Extrato consolidado em todas as contas e bancos relacionados.
+            </p>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+
+        <div class="col-12 col-md-4">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="small text-secondary mb-1">
+                        Movimentações
+                    </div>
+                    <div class="fs-4 fw-semibold">
+                        {{ transaction_count }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-md-4">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="small text-secondary mb-1">
+                        Recebido
+                    </div>
+                    <div class="fs-4 fw-semibold" data-sensitive-value>
+                        {{ total_credit|brl }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-md-4">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="small text-secondary mb-1">
+                        Enviado / pago
+                    </div>
+                    <div class="fs-4 fw-semibold" data-sensitive-value>
+                        {{ total_debit|brl }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+
+                <div class="col-12 col-md-6 col-xl-3">
+                    <label for="bank" class="form-label">
+                        Banco
+                    </label>
+                    <select id="bank" name="bank" class="form-select">
+                        <option value="">Todos</option>
+                        {% for bank in banks %}
+                            <option
+                                value="{{ bank.pk }}"
+                                {% if bank_filter == bank.pk|stringformat:"s" %}selected{% endif %}
+                            >
+                                {{ bank.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="direction" class="form-label">
+                        Natureza
+                    </label>
+                    <select id="direction" name="direction" class="form-select">
+                        <option value="">Todas</option>
+                        {% for value, label in direction_choices %}
+                            <option
+                                value="{{ value }}"
+                                {% if direction_filter == value %}selected{% endif %}
+                            >
+                                {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="date_from" class="form-label">
+                        De
+                    </label>
+                    <input
+                        id="date_from"
+                        name="date_from"
+                        type="date"
+                        value="{{ date_from }}"
+                        class="form-control"
+                    >
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="date_to" class="form-label">
+                        Até
+                    </label>
+                    <input
+                        id="date_to"
+                        name="date_to"
+                        type="date"
+                        value="{{ date_to }}"
+                        class="form-control"
+                    >
+                </div>
+
+                <div class="col-12 col-xl-3">
+                    <div class="d-grid d-md-flex gap-2">
+                        <button class="btn btn-primary flex-fill">
+                            Filtrar
+                        </button>
+                        <a
+                            href="{% url 'finance:counterparty-detail' counterparty.pk %}"
+                            class="btn btn-outline-secondary flex-fill"
+                        >
+                            Limpar
+                        </a>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="row g-4">
+
+        <div class="col-12 col-xl-9">
+            <div class="card border-0 shadow-sm">
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th><a class="table-sort-link" href="{% sort_url 'date' %}">Data <span class="sort-icon">{% sort_icon 'date' %}</span></a></th>
+                                <th><a class="table-sort-link" href="{% sort_url 'bank' %}">Banco / conta <span class="sort-icon">{% sort_icon 'bank' %}</span></a></th>
+                                <th><a class="table-sort-link" href="{% sort_url 'description' %}">Descrição <span class="sort-icon">{% sort_icon 'description' %}</span></a></th>
+                                <th><a class="table-sort-link" href="{% sort_url 'fitid' %}">FITID <span class="sort-icon">{% sort_icon 'fitid' %}</span></a></th>
+                                <th class="text-end"><a class="table-sort-link" href="{% sort_url 'amount' %}">Valor <span class="sort-icon">{% sort_icon 'amount' %}</span></a></th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                        {% for transaction in transactions %}
+                            <tr>
+                                <td class="text-nowrap">
+                                    {% if transaction.ofx_time_was_supplied %}
+                                        {{ transaction.posted_at|date:"d/m/Y H:i" }}
+                                    {% else %}
+                                        {{ transaction.posted_at|date:"d/m/Y" }}
+                                    {% endif %}
+                                </td>
+
+                                <td>
+                                    <div class="fw-semibold">
+                                        {{ transaction.account.bank.name }}
+                                    </div>
+                                    <div class="small text-secondary">
+                                        {{ transaction.account.nickname }}
+                                    </div>
+                                </td>
+
+                                <td class="transaction-description">
+                                    {{ transaction.description }}
+                                </td>
+
+                                <td class="small">
+                                    {{ transaction.fitid|default:"—" }}
+                                </td>
+
+                                <td
+                                    class="text-end text-nowrap fw-semibold"
+                                    data-sensitive-value
+                                >
+                                    {{ transaction.signed_amount|brl_signed }}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center py-5 text-secondary">
+                                    Nenhuma movimentação para os filtros escolhidos.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-3">
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white fw-semibold">
+                    Identidades / aliases
+                </div>
+
+                <ul class="list-group list-group-flush">
+                    {% for alias in identity_aliases %}
+                        <li class="list-group-item">
+                            <div>{{ alias.alias }}</div>
+                            <div class="small text-secondary">
+                                {{ alias.get_alias_type_display }}
+                            </div>
+                        </li>
+                    {% empty %}
+                        <li class="list-group-item text-secondary">
+                            Nenhum alias de identidade.
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <div class="card border-0 shadow-sm mb-4">
+                <div class="card-header bg-white fw-semibold">
+                    Textos bancários vinculados
+                </div>
+
+                <div class="card-body py-2 small text-secondary">
+                    Evidências originais usadas para reconhecer esta contraparte.
+                    Não são tratadas como nomes alternativos.
+                </div>
+
+                <ul class="list-group list-group-flush">
+                    {% for alias in bank_text_aliases %}
+                        <li class="list-group-item small">
+                            {{ alias.alias }}
+                        </li>
+                    {% empty %}
+                        <li class="list-group-item text-secondary">
+                            Nenhum texto bancário vinculado.
+                        </li>
+                    {% endfor %}
+                </ul>
+            </div>
+
+            <div class="card border-0 shadow-sm">
+                <div class="card-header bg-white fw-semibold">
+                    Adicionar alias
+                </div>
+
+                <div class="card-body">
+                    <form method="post">
+                        {% csrf_token %}
+
+                        <div class="mb-3">
+                            <label
+                                for="{{ alias_form.alias.id_for_label }}"
+                                class="form-label"
+                            >
+                                {{ alias_form.alias.label }}
+                            </label>
+                            {{ alias_form.alias }}
+                        </div>
+
+                        <div class="mb-3">
+                            <label
+                                for="{{ alias_form.alias_type.id_for_label }}"
+                                class="form-label"
+                            >
+                                {{ alias_form.alias_type.label }}
+                            </label>
+                            {{ alias_form.alias_type }}
+                        </div>
+
+                        {% for field in alias_form %}
+                            {% for error in field.errors %}
+                                <div class="text-danger small mb-2">
+                                    {{ error }}
+                                </div>
+                            {% endfor %}
+                        {% endfor %}
+
+                        <div class="d-grid">
+                            <button class="btn btn-outline-primary">
+                                Adicionar alias
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+</div>
+{% endblock %}

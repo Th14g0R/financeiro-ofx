@@ -1,0 +1,630 @@
+{% extends "base.html" %}
+{% load static finance_extras %}
+
+{% block title %}
+    Dashboard | Financeiro OFX
+{% endblock %}
+
+{% block content %}
+
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">
+                Dashboard
+            </h1>
+
+            <p class="text-secondary mb-0">
+                Visão financeira por banco e período, separando recursos externos de transferências entre contas próprias.
+            </p>
+        </div>
+
+        <div class="badge text-bg-light border fs-6">
+            {{ period_label }}
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+
+            <div class="row g-3 align-items-end">
+
+                <div class="col-12 col-md-6 col-xl-3">
+                    <form method="get">
+                        <label
+                            for="bank"
+                            class="form-label fw-semibold"
+                        >
+                            Banco
+                        </label>
+
+                        {% if period_mode == "month" %}
+                            <input
+                                type="hidden"
+                                name="month"
+                                value="{{ selected_month }}"
+                            >
+                        {% elif period_mode == "year" %}
+                            <input
+                                type="hidden"
+                                name="year"
+                                value="{{ selected_year }}"
+                            >
+                        {% elif period_mode == "period" %}
+                            <input
+                                type="hidden"
+                                name="date_from"
+                                value="{{ period_start }}"
+                            >
+                            <input
+                                type="hidden"
+                                name="date_to"
+                                value="{{ period_end }}"
+                            >
+                        {% endif %}
+
+                        <div class="input-group">
+                            <select
+                                id="bank"
+                                name="bank"
+                                class="form-select"
+                            >
+                                <option value="">
+                                    Todos os bancos
+                                </option>
+
+                                {% for bank in available_banks %}
+                                    <option
+                                        value="{{ bank.pk }}"
+                                        {% if selected_bank_id == bank.pk %}selected{% endif %}
+                                    >
+                                        {{ bank.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+
+                            <button
+                                type="submit"
+                                class="btn btn-primary"
+                            >
+                                Aplicar
+                            </button>
+                        </div>
+
+                        <div class="form-text">
+                            Todos os cartões e gráficos respeitam este banco.
+                        </div>
+                    </form>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-3">
+                    <form method="get">
+                        {% if selected_bank_id %}
+                            <input
+                                type="hidden"
+                                name="bank"
+                                value="{{ selected_bank_id }}"
+                            >
+                        {% endif %}
+
+                        <label
+                            for="month"
+                            class="form-label fw-semibold"
+                        >
+                            Visualizar mês
+                        </label>
+
+                        <div class="input-group">
+                            <input
+                                id="month"
+                                name="month"
+                                type="month"
+                                value="{{ selected_month }}"
+                                class="form-control"
+                            >
+
+                            <button
+                                type="submit"
+                                class="btn btn-outline-primary"
+                            >
+                                Ver mês
+                            </button>
+                        </div>
+
+                        <div class="form-text">
+                            Mostra o detalhamento diário.
+                        </div>
+                    </form>
+                </div>
+
+                <div class="col-12 col-md-5 col-xl-2">
+                    <form method="get">
+                        {% if selected_bank_id %}
+                            <input
+                                type="hidden"
+                                name="bank"
+                                value="{{ selected_bank_id }}"
+                            >
+                        {% endif %}
+
+                        <label
+                            for="year"
+                            class="form-label fw-semibold"
+                        >
+                            Visualizar ano
+                        </label>
+
+                        <div class="input-group">
+                            <select
+                                id="year"
+                                name="year"
+                                class="form-select"
+                            >
+                                {% for year in available_years %}
+                                    <option
+                                        value="{{ year }}"
+                                        {% if selected_year == year %}selected{% endif %}
+                                    >
+                                        {{ year }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+
+                            <button
+                                type="submit"
+                                class="btn btn-outline-primary"
+                            >
+                                Ver
+                            </button>
+                        </div>
+
+                        <div class="form-text">
+                            Clique no mês do gráfico para detalhar.
+                        </div>
+                    </form>
+                </div>
+
+                <div class="col-12 col-md-7 col-xl-4">
+                    <form method="get">
+                        {% if selected_bank_id %}
+                            <input
+                                type="hidden"
+                                name="bank"
+                                value="{{ selected_bank_id }}"
+                            >
+                        {% endif %}
+
+                        <label class="form-label fw-semibold">
+                            Período personalizado
+                        </label>
+
+                        <div class="row g-2">
+                            <div class="col-12 col-sm-5">
+                                <input
+                                    name="date_from"
+                                    type="date"
+                                    value="{% if period_mode == 'period' %}{{ period_start }}{% endif %}"
+                                    class="form-control"
+                                    aria-label="Data inicial"
+                                >
+                            </div>
+
+                            <div class="col-12 col-sm-5">
+                                <input
+                                    name="date_to"
+                                    type="date"
+                                    value="{% if period_mode == 'period' %}{{ period_end }}{% endif %}"
+                                    class="form-control"
+                                    aria-label="Data final"
+                                >
+                            </div>
+
+                            <div class="col-12 col-sm-2 d-grid">
+                                <button
+                                    type="submit"
+                                    class="btn btn-outline-secondary"
+                                >
+                                    Aplicar
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="form-text">
+                            Períodos longos são agrupados por mês.
+                        </div>
+                    </form>
+                </div>
+
+            </div>
+
+            <div class="d-flex flex-wrap gap-2 mt-3">
+                <a
+                    href="?{% if selected_bank_id %}bank={{ selected_bank_id }}&{% endif %}month={% now 'Y-m' %}"
+                    class="btn btn-sm btn-outline-dark"
+                >
+                    Mês atual
+                </a>
+
+                <a
+                    href="?{% if selected_bank_id %}bank={{ selected_bank_id }}&{% endif %}year={% now 'Y' %}"
+                    class="btn btn-sm btn-outline-dark"
+                >
+                    Ano atual
+                </a>
+
+                {% if selected_bank_id %}
+                    <a
+                        href="?{% if selected_month %}month={{ selected_month }}{% elif period_mode == 'year' %}year={{ selected_year }}{% else %}date_from={{ period_start }}&date_to={{ period_end }}{% endif %}"
+                        class="btn btn-sm btn-outline-secondary"
+                    >
+                        Mostrar todos os bancos
+                    </a>
+                {% endif %}
+
+                <a
+                    href="{{ transaction_list_url }}"
+                    class="btn btn-sm btn-outline-primary"
+                >
+                    Ver movimentações deste recorte
+                </a>
+            </div>
+
+        </div>
+    </div>
+
+    {% if month_drilldown %}
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body py-3">
+                <div class="d-flex flex-wrap align-items-center gap-2">
+                    <span class="small text-secondary me-1">
+                        Abrir mês:
+                    </span>
+
+                    {% for month in month_drilldown %}
+                        <a
+                            href="?month={{ month.value }}{% if selected_bank_id %}&bank={{ selected_bank_id }}{% endif %}"
+                            class="btn btn-sm btn-outline-primary"
+                        >
+                            {{ month.label }}
+                        </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    <div class="row g-3 mb-4">
+
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="text-secondary small mb-2">
+                        Entradas externas
+                    </div>
+
+                    <div
+                        class="fs-3 fw-semibold"
+                        data-sensitive-value
+                    >
+                        {{ period_credit|brl }}
+                    </div>
+
+                    <div class="small text-secondary mt-1">
+                        {{ bank_scope_label }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="text-secondary small mb-2">
+                        Saídas externas
+                    </div>
+
+                    <div
+                        class="fs-3 fw-semibold"
+                        data-sensitive-value
+                    >
+                        {{ period_debit|brl }}
+                    </div>
+
+                    <div class="small text-secondary mt-1">
+                        {{ bank_scope_label }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="text-secondary small mb-2">
+                        Resultado externo
+                    </div>
+
+                    <div
+                        class="fs-3 fw-semibold"
+                        data-sensitive-value
+                    >
+                        {{ period_net|brl }}
+                    </div>
+
+                    <div class="small text-secondary mt-1">
+                        {{ bank_scope_label }}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-md-6 col-xl-3">
+            <div class="card dashboard-card h-100">
+                <div class="card-body">
+                    <div class="text-secondary small mb-2">
+                        Entre minhas contas
+                    </div>
+
+                    {% if selected_bank %}
+                        <div
+                            class="fs-5 fw-semibold"
+                            data-sensitive-value
+                        >
+                            {{ internal_net|brl_signed }}
+                        </div>
+
+                        <div class="small text-secondary mt-2">
+                            Recebido:
+                            <span data-sensitive-value>
+                                {{ internal_received|brl }}
+                            </span>
+                        </div>
+
+                        <div class="small text-secondary">
+                            Enviado:
+                            <span data-sensitive-value>
+                                {{ internal_sent|brl }}
+                            </span>
+                        </div>
+                    {% else %}
+                        <div
+                            class="fs-3 fw-semibold"
+                            data-sensitive-value
+                        >
+                            {{ internal_volume|brl }}
+                        </div>
+
+                        <div class="small text-secondary mt-1">
+                            {{ internal_transfer_count }}
+                            transferência(ões) interna(s)
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-xl-8">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body py-3">
+                    <div class="d-flex flex-wrap gap-4">
+                        <div>
+                            <div class="small text-secondary">
+                                Movimentações bancárias
+                            </div>
+                            <div class="fw-semibold">
+                                {{ transaction_count }}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="small text-secondary">
+                                Movimentos externos
+                            </div>
+                            <div class="fw-semibold">
+                                {{ external_transaction_count }}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="small text-secondary">
+                                Crédito bancário bruto
+                            </div>
+                            <div
+                                class="fw-semibold"
+                                data-sensitive-value
+                            >
+                                {{ gross_credit|brl }}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="small text-secondary">
+                                Débito bancário bruto
+                            </div>
+                            <div
+                                class="fw-semibold"
+                                data-sensitive-value
+                            >
+                                {{ gross_debit|brl }}
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="small text-secondary">
+                                Contas no recorte
+                            </div>
+                            <div class="fw-semibold">
+                                {{ bank_count }} banco(s) · {{ account_count }} conta(s)
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-4">
+            {% if possible_transfer_count %}
+                <div class="alert alert-warning h-100 mb-0">
+                    <div class="fw-semibold">
+                        {{ possible_transfer_count }}
+                        possível(is) transferência(s) interna(s)
+                    </div>
+                    <div class="small mt-1 mb-3">
+                        Enquanto não forem confirmadas, permanecem contabilizadas
+                        como entrada/saída externa.
+                    </div>
+                    <a
+                        href="{% url 'finance:internal-transfer-list' %}"
+                        class="btn btn-sm btn-warning"
+                    >
+                        Revisar agora
+                    </a>
+                </div>
+            {% else %}
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-body py-3">
+                        <div class="small text-secondary">
+                            Classificação interna
+                        </div>
+                        <div class="fw-semibold">
+                            Nenhuma sugestão pendente neste recorte.
+                        </div>
+                        <a
+                            href="{% url 'finance:internal-transfer-list' %}"
+                            class="small text-decoration-none"
+                        >
+                            Ver transferências internas
+                        </a>
+                    </div>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+
+        <div class="col-12 col-xl-8">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-0 pt-4 px-4">
+                    <div class="fw-semibold">
+                        Entradas externas x saídas externas — {{ period_label }}
+                    </div>
+
+                    {% if period_chart.grouping == "month" %}
+                        <div class="small text-secondary mt-1">
+                            Clique em um mês para abrir o detalhamento diário mantendo o banco selecionado.
+                        </div>
+                    {% endif %}
+                </div>
+
+                <div class="card-body p-4">
+                    <div class="chart-container sensitive-chart">
+                        <canvas id="periodMovementChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-0 pt-4 px-4">
+                    <div class="fw-semibold">
+                        {{ expense_chart_title }} — {{ period_label }}
+                    </div>
+                </div>
+
+                <div class="card-body p-4">
+                    {% if expense_chart.values %}
+                        <div class="chart-container chart-container-sm sensitive-chart">
+                            <canvas id="expenseChart"></canvas>
+                        </div>
+                    {% else %}
+                        <div class="text-secondary py-5 text-center">
+                            Não há saídas externas no período selecionado.
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="d-flex flex-wrap gap-2">
+                <a
+                    href="{% url 'imports:upload' %}"
+                    class="btn btn-primary"
+                >
+                    Importar extrato
+                </a>
+
+                <a
+                    href="{% url 'imports:history' %}"
+                    class="btn btn-outline-primary"
+                >
+                    Ver importações
+                </a>
+
+                <a
+                    href="{{ transaction_list_url }}"
+                    class="btn btn-outline-secondary"
+                >
+                    Ver todas as movimentações
+                </a>
+
+                <a
+                    href="{{ external_transaction_list_url }}"
+                    class="btn btn-outline-secondary"
+                >
+                    Ver movimentos externos
+                </a>
+
+                <a
+                    href="{% url 'finance:internal-transfer-list' %}"
+                    class="btn btn-outline-secondary"
+                >
+                    Transferências internas
+                </a>
+
+                <a
+                    href="{% url 'finance:counterparty-list' %}"
+                    class="btn btn-outline-secondary"
+                >
+                    Pessoas / contrapartes
+                </a>
+
+                <a
+                    href="{% url 'integrations:list' %}"
+                    class="btn btn-outline-secondary"
+                >
+                    Integrações API
+                </a>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<div
+    id="dashboardData"
+    class="d-none"
+    data-period-chart="{{ period_chart|json_b64 }}"
+    data-expense-chart="{{ expense_chart|json_b64 }}"
+></div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script
+    src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+    integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+    crossorigin="anonymous"
+></script>
+
+<script src="{% static 'js/dashboard.js' %}"></script>
+{% endblock %}

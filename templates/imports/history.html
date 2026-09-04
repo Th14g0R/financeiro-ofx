@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% load query_extras %}
+
+{% block title %}Histórico de importações | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Histórico de importações</h1>
+            <p class="text-secondary mb-0">
+                Consulte, reprocese ou exclua lotes importados.
+            </p>
+        </div>
+
+        <div>
+            <a
+                href="{% url 'imports:upload' %}"
+                class="btn btn-primary"
+            >
+                Nova importação
+            </a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'batch' %}">
+                                Lote <span class="sort-icon">{% sort_icon 'batch' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'date' %}">
+                                Data <span class="sort-icon">{% sort_icon 'date' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'files' %}">
+                                Arquivos <span class="sort-icon">{% sort_icon 'files' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'status' %}">
+                                Situação <span class="sort-icon">{% sort_icon 'status' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'reprocessed' %}">
+                                Reprocessado <span class="sort-icon">{% sort_icon 'reprocessed' %}</span>
+                            </a>
+                        </th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                {% for batch in batches %}
+                    <tr>
+                        <td class="fw-semibold">
+                            #{{ batch.pk }}
+                        </td>
+
+                        <td class="text-nowrap">
+                            {{ batch.created_at|date:"d/m/Y H:i" }}
+                        </td>
+
+                        <td>
+                            {{ batch.file_count }}
+                        </td>
+
+                        <td>
+                            {{ batch.get_status_display }}
+                        </td>
+
+                        <td>
+                            {% if batch.reprocessed_at %}
+                                {{ batch.reprocessed_at|date:"d/m/Y H:i" }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+
+                        <td class="text-end text-nowrap">
+                            <a
+                                href="{% url 'imports:batch-detail' batch.pk %}"
+                                class="btn btn-sm btn-outline-secondary"
+                            >
+                                Abrir
+                            </a>
+
+                            <a
+                                href="{% url 'imports:batch-edit' batch.pk %}"
+                                class="btn btn-sm btn-outline-primary"
+                            >
+                                Editar
+                            </a>
+
+                            <a
+                                href="{% url 'imports:batch-delete' batch.pk %}"
+                                class="btn btn-sm btn-outline-danger"
+                            >
+                                Excluir
+                            </a>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="6" class="text-center py-5 text-secondary">
+                            Nenhuma importação encontrada.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

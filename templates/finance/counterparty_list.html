@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% load static query_extras %}
+
+{% block title %}Pessoas / contrapartes | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Pessoas / contrapartes</h1>
+            <p class="text-secondary mb-0">
+                O sistema unifica automaticamente apenas o que é seguro. Para nomes similares ou duvidosos, selecione os registros e confirme a unificação manualmente.
+            </p>
+        </div>
+
+        <form
+            method="post"
+            action="{% url 'finance:counterparty-rebuild' %}"
+        >
+            {% csrf_token %}
+            <button
+                type="submit"
+                class="btn btn-outline-primary"
+            >
+                Reanalisar associações
+            </button>
+        </form>
+    </div>
+
+    <div class="alert alert-light border mb-4">
+        <div>
+            <strong>Automático:</strong>
+            a reanálise continua unindo somente casos de alta certeza.
+        </div>
+        <div class="mt-1">
+            <strong>Manual:</strong>
+            pesquise os nomes parecidos, marque dois ou mais registros e use
+            <strong>Unificar selecionados</strong>. Antes de gravar, o sistema
+            mostrará movimentações, aliases e eventuais conflitos de identidade.
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+                <div class="col-12 col-lg-9">
+                    <label for="q" class="form-label">
+                        Nome ou alias
+                    </label>
+
+                    <input
+                        id="q"
+                        name="q"
+                        value="{{ query }}"
+                        class="form-control"
+                        placeholder="Ex.: João, JOAO SILVA, nome encontrado no PIX"
+                        autofocus
+                    >
+                </div>
+
+                <div class="col-12 col-lg-3 d-grid">
+                    <button type="submit" class="btn btn-primary">
+                        Pesquisar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <form
+        id="counterpartyMergeForm"
+        method="post"
+        action="{% url 'finance:counterparty-merge-preview' %}"
+    >
+        {% csrf_token %}
+
+        <div class="d-flex flex-column flex-md-row justify-content-between gap-2 align-items-md-center mb-3">
+            <div class="small text-secondary">
+                <span id="counterpartySelectedCount">0</span>
+                selecionado(s). A seleção é feita entre os registros desta página.
+            </div>
+
+            <button
+                id="counterpartyMergeButton"
+                type="submit"
+                class="btn btn-success"
+                disabled
+            >
+                Unificar selecionados
+            </button>
+        </div>
+
+        <div class="card border-0 shadow-sm">
+            <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th class="text-center" style="width: 48px;">
+                            <input
+                                id="counterpartySelectAll"
+                                type="checkbox"
+                                class="form-check-input"
+                                aria-label="Selecionar todos os registros visíveis"
+                            >
+                        </th>
+                        <th><a class="table-sort-link" href="{% sort_url 'name' %}">Nome <span class="sort-icon">{% sort_icon 'name' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'kind' %}">Tipo <span class="sort-icon">{% sort_icon 'kind' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'transactions' %}">Movimentações <span class="sort-icon">{% sort_icon 'transactions' %}</span></a></th>
+                        <th class="text-end">Ação</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                {% for counterparty in counterparties %}
+                    <tr>
+                        <td class="text-center">
+                            <input
+                                type="checkbox"
+                                class="form-check-input counterparty-select"
+                                name="counterparties"
+                                value="{{ counterparty.pk }}"
+                                aria-label="Selecionar {{ counterparty.display_name }}"
+                            >
+                        </td>
+
+                        <td class="fw-semibold">
+                            {{ counterparty.display_name }}
+                        </td>
+
+                        <td>
+                            {{ counterparty.get_kind_display }}
+                        </td>
+
+                        <td>
+                            {{ counterparty.transaction_count }}
+                        </td>
+
+                        <td class="text-end">
+                            <a
+                                href="{% url 'finance:counterparty-detail' counterparty.pk %}"
+                                class="btn btn-sm btn-outline-primary"
+                            >
+                                Ver extrato consolidado
+                            </a>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-secondary">
+                            Nenhuma contraparte encontrada.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if is_paginated %}
+            <div class="card-footer bg-white border-0">
+                <nav>
+                    <ul class="pagination justify-content-end mb-0">
+                        {% if page_obj.has_previous %}
+                            <li class="page-item">
+                                <a
+                                    class="page-link"
+                                    href="{% querystring page=page_obj.previous_page_number %}"
+                                >
+                                    Anterior
+                                </a>
+                            </li>
+                        {% endif %}
+
+                        <li class="page-item disabled">
+                            <span class="page-link">
+                                {{ page_obj.number }} / {{ page_obj.paginator.num_pages }}
+                            </span>
+                        </li>
+
+                        {% if page_obj.has_next %}
+                            <li class="page-item">
+                                <a
+                                    class="page-link"
+                                    href="{% querystring page=page_obj.next_page_number %}"
+                                >
+                                    Próxima
+                                </a>
+                            </li>
+                        {% endif %}
+                    </ul>
+                </nav>
+            </div>
+        {% endif %}
+        </div>
+    </form>
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/counterparty_merge.js' %}"></script>
+{% endblock %}

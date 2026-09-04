@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+
+{% block title %}Confirmar unificação | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">
+            Confirmar unificação manual
+        </h1>
+        <p class="text-secondary mb-0">
+            Escolha qual registro será mantido e qual nome deverá aparecer no sistema.
+            As movimentações e aliases dos demais registros serão transferidos para ele.
+        </p>
+    </div>
+
+    <div class="alert alert-info">
+        A unificação <strong>não altera</strong> FITID, valor, data, banco ou
+        descrição original das movimentações. Os registros secundários são apenas
+        desativados após suas movimentações e aliases serem vinculados ao principal.
+    </div>
+
+    {% if analysis.strong_conflicts %}
+        <div class="alert alert-danger">
+            <div class="fw-semibold mb-2">
+                Conflitos fortes encontrados
+            </div>
+
+            {% for warning in analysis.strong_conflicts %}
+                <div>• {{ warning }}</div>
+            {% endfor %}
+
+            <div class="small mt-2">
+                O sistema não faria esta unificação automaticamente.
+                Se você tiver certeza de que são a mesma contraparte,
+                será necessário confirmar explicitamente abaixo.
+            </div>
+        </div>
+    {% endif %}
+
+    {% if analysis.informational_warnings %}
+        <div class="alert alert-warning">
+            <div class="fw-semibold mb-2">
+                Pontos para revisar
+            </div>
+
+            {% for warning in analysis.informational_warnings %}
+                <div>• {{ warning }}</div>
+            {% endfor %}
+        </div>
+    {% endif %}
+
+    <form
+        method="post"
+        action="{% url 'finance:counterparty-merge-apply' %}"
+    >
+        {% csrf_token %}
+
+        {% for item in merge_items %}
+            <input
+                type="hidden"
+                name="counterparties"
+                value="{{ item.counterparty.pk }}"
+            >
+        {% endfor %}
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white">
+                <div class="fw-semibold">
+                    Registros selecionados
+                </div>
+                <div class="small text-secondary">
+                    Marque o registro principal que permanecerá ativo.
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th class="text-center">Principal</th>
+                            <th>Nome atual</th>
+                            <th>Tipo</th>
+                            <th>Movimentações</th>
+                            <th>Identidades / aliases</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                    {% for item in merge_items %}
+                        <tr>
+                            <td class="text-center">
+                                <input
+                                    type="radio"
+                                    name="target"
+                                    value="{{ item.counterparty.pk }}"
+                                    class="form-check-input"
+                                    {% if confirm_form.data.target %}
+                                        {% if confirm_form.data.target == item.counterparty.pk|stringformat:"s" %}checked{% endif %}
+                                    {% elif recommended_target_id == item.counterparty.pk %}
+                                        checked
+                                    {% endif %}
+                                    required
+                                >
+                            </td>
+
+                            <td class="fw-semibold">
+                                {{ item.counterparty.display_name }}
+                            </td>
+
+                            <td>
+                                {{ item.counterparty.get_kind_display }}
+                            </td>
+
+                            <td>
+                                {{ item.counterparty.transaction_count }}
+                            </td>
+
+                            <td>
+                                {% if item.counterparty.tax_id %}
+                                    <div class="small">
+                                        CPF/CNPJ:
+                                        {{ item.counterparty.tax_id }}
+                                    </div>
+                                {% endif %}
+
+                                {% for alias in item.identity_aliases %}
+                                    <div class="small">
+                                        {{ alias.get_alias_type_display }}:
+                                        {{ alias.alias }}
+                                    </div>
+                                {% empty %}
+                                    <span class="text-secondary">—</span>
+                                {% endfor %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body">
+                <label
+                    for="final_display_name"
+                    class="form-label fw-semibold"
+                >
+                    Nome final
+                </label>
+
+                <input
+                    id="final_display_name"
+                    name="final_display_name"
+                    class="form-control"
+                    maxlength="200"
+                    value="{% if confirm_form.data.final_display_name %}{{ confirm_form.data.final_display_name }}{% else %}{{ suggested_name }}{% endif %}"
+                    required
+                >
+
+                <div class="form-text">
+                    Você pode corrigir o nome antes de concluir a unificação.
+                </div>
+
+                {% if confirm_form.final_display_name.errors %}
+                    {% for error in confirm_form.final_display_name.errors %}
+                        <div class="text-danger small mt-1">
+                            {{ error }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        </div>
+
+        {% if confirm_form.non_field_errors %}
+            <div class="alert alert-danger">
+                {% for error in confirm_form.non_field_errors %}
+                    <div>{{ error }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if confirm_form.target.errors %}
+            <div class="alert alert-danger">
+                {% for error in confirm_form.target.errors %}
+                    <div>{{ error }}</div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-body">
+
+                <div class="form-check mb-3">
+                    <input
+                        id="confirm_merge"
+                        name="confirm_merge"
+                        type="checkbox"
+                        value="on"
+                        class="form-check-input"
+                        {% if confirm_form.data.confirm_merge %}checked{% endif %}
+                        required
+                    >
+                    <label
+                        for="confirm_merge"
+                        class="form-check-label"
+                    >
+                        Confirmo que os registros selecionados representam
+                        a mesma pessoa/empresa.
+                    </label>
+                </div>
+
+                {% if confirm_form.confirm_merge.errors %}
+                    {% for error in confirm_form.confirm_merge.errors %}
+                        <div class="text-danger small mb-2">
+                            {{ error }}
+                        </div>
+                    {% endfor %}
+                {% endif %}
+
+                {% if analysis.has_strong_conflicts %}
+                    <div class="form-check">
+                        <input
+                            id="confirm_strong_conflicts"
+                            name="confirm_strong_conflicts"
+                            type="checkbox"
+                            value="on"
+                            class="form-check-input"
+                            {% if confirm_form.data.confirm_strong_conflicts %}checked{% endif %}
+                        >
+                        <label
+                            for="confirm_strong_conflicts"
+                            class="form-check-label"
+                        >
+                            Mesmo com os conflitos de identidade acima,
+                            confirmo que são a mesma contraparte.
+                        </label>
+                    </div>
+
+                    {% if confirm_form.confirm_strong_conflicts.errors %}
+                        {% for error in confirm_form.confirm_strong_conflicts.errors %}
+                            <div class="text-danger small mt-2">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+                    {% endif %}
+                {% endif %}
+
+            </div>
+        </div>
+
+        <div class="d-flex flex-wrap justify-content-end gap-2">
+            <a
+                href="{% url 'finance:counterparty-list' %}"
+                class="btn btn-outline-secondary"
+            >
+                Cancelar
+            </a>
+
+            <button
+                type="submit"
+                class="btn btn-success"
+            >
+                Confirmar unificação
+            </button>
+        </div>
+
+    </form>
+
+</div>
+{% endblock %}

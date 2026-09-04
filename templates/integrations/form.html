@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}{{ title }} | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">{{ title }}</h1>
+        <p class="text-secondary mb-0">
+            As credenciais secretas são armazenadas criptografadas.
+        </p>
+    </div>
+
+    <div class="alert alert-info">
+        <strong>Recomendado:</strong>
+        para sua própria conta do Mercado Pago, use
+        <strong>Client ID + Client Secret</strong>.
+        O Financeiro OFX gera e renova o Access Token temporário
+        somente no servidor. Nunca coloque Client Secret ou Access Token
+        em JavaScript, repositório Git ou mensagens.
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">
+                        {{ form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="row g-3">
+
+                    <div class="col-12 col-lg-6">
+                        <label class="form-label" for="{{ form.name.id_for_label }}">
+                            {{ form.name.label }}
+                        </label>
+                        {{ form.name }}
+                    </div>
+
+                    <div class="col-12 col-lg-3">
+                        <label class="form-label" for="{{ form.provider.id_for_label }}">
+                            {{ form.provider.label }}
+                        </label>
+                        {{ form.provider }}
+                    </div>
+
+                    <div class="col-12 col-lg-3">
+                        <label class="form-label" for="{{ form.auth_mode.id_for_label }}">
+                            {{ form.auth_mode.label }}
+                        </label>
+                        {{ form.auth_mode }}
+                    </div>
+
+                    <div class="col-12">
+                        <label class="form-label" for="{{ form.account.id_for_label }}">
+                            {{ form.account.label }}
+                        </label>
+                        {{ form.account }}
+                        <div class="form-text">
+                            Os lançamentos obtidos pela API serão relacionados a esta conta local.
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-lg-4">
+                        <label class="form-label" for="{{ form.client_id.id_for_label }}">
+                            {{ form.client_id.label }}
+                        </label>
+                        {{ form.client_id }}
+                    </div>
+
+                    <div class="col-12 col-lg-4">
+                        <label class="form-label" for="{{ form.client_secret.id_for_label }}">
+                            {{ form.client_secret.label }}
+                        </label>
+                        {{ form.client_secret }}
+                        <div class="form-text">
+                            {{ form.client_secret.help_text }}
+                        </div>
+                    </div>
+
+                    <div class="col-12 col-lg-4">
+                        <label class="form-label" for="{{ form.access_token.id_for_label }}">
+                            {{ form.access_token.label }}
+                        </label>
+                        {{ form.access_token }}
+                        <div class="form-text">
+                            {{ form.access_token.help_text }}
+                        </div>
+                    </div>
+
+                    {% for field in form %}
+                        {% for error in field.errors %}
+                            <div class="col-12">
+                                <div class="text-danger small">
+                                    {{ field.label }}: {{ error }}
+                                </div>
+                            </div>
+                        {% endfor %}
+                    {% endfor %}
+
+                    <div class="col-12 col-lg-6">
+                        <label
+                            class="form-label"
+                            for="{{ form.current_password.id_for_label }}"
+                        >
+                            {{ form.current_password.label }}
+                        </label>
+                        {{ form.current_password }}
+                        <div class="form-text">
+                            {{ form.current_password.help_text }}
+                        </div>
+                    </div>
+
+                    <div class="col-12">
+                        <div class="form-check">
+                            {{ form.is_active }}
+                            <label
+                                class="form-check-label"
+                                for="{{ form.is_active.id_for_label }}"
+                            >
+                                {{ form.is_active.label }}
+                            </label>
+                        </div>
+                    </div>
+
+                </div>
+
+                <hr class="my-4">
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        Salvar integração
+                    </button>
+
+                    <a
+                        href="{% url 'integrations:list' %}"
+                        class="btn btn-outline-secondary"
+                    >
+                        Cancelar
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

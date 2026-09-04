@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+
+{% block title %}Analisar OFX | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">Analisar OFX</h1>
+        <p class="text-secondary mb-0">
+            Leia e valide um arquivo OFX sem gravar movimentações no banco de dados.
+        </p>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+
+            <form method="post" enctype="multipart/form-data" novalidate>
+                {% csrf_token %}
+
+                <div class="row g-3">
+                    <div class="col-12 col-lg-9">
+                        <label
+                            for="{{ form.file.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.file.label }}
+                        </label>
+
+                        {{ form.file }}
+
+                        {% for error in form.file.errors %}
+                            <div class="text-danger small mt-2">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-lg-3 d-flex align-items-end">
+                        <button
+                            type="submit"
+                            class="btn btn-primary w-100"
+                        >
+                            Analisar arquivo
+                        </button>
+                    </div>
+                </div>
+
+                {% if form.file.help_text %}
+                    <div class="form-text mt-2">
+                        {{ form.file.help_text }}
+                    </div>
+                {% endif %}
+            </form>
+
+        </div>
+    </div>
+
+    {% if parsed_file %}
+
+        <div class="alert alert-success">
+            Arquivo <strong>{{ uploaded_filename }}</strong> lido com sucesso.
+            Nenhuma movimentação foi gravada.
+        </div>
+
+        <div class="row g-3 mb-4">
+            <div class="col-12 col-md-4">
+                <div class="card dashboard-card h-100">
+                    <div class="card-body">
+                        <div class="text-secondary small mb-2">
+                            Versão OFX
+                        </div>
+                        <div class="fs-4 fw-semibold">
+                            {{ parsed_file.version|default:"—" }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-4">
+                <div class="card dashboard-card h-100">
+                    <div class="card-body">
+                        <div class="text-secondary small mb-2">
+                            Codificação
+                        </div>
+                        <div class="fs-4 fw-semibold">
+                            {{ parsed_file.encoding|default:"—" }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-12 col-md-4">
+                <div class="card dashboard-card h-100">
+                    <div class="card-body">
+                        <div class="text-secondary small mb-2">
+                            Lançamentos
+                        </div>
+                        <div class="fs-4 fw-semibold">
+                            {{ parsed_file.transaction_count }}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {% for preview in statement_previews %}
+            <div class="card border-0 shadow-sm mb-4">
+
+                <div class="card-header bg-white py-3">
+                    <div class="d-flex flex-column flex-lg-row justify-content-between gap-2">
+
+                        <div>
+                            <div class="fw-semibold">
+                                {% if preview.statement.bank_name %}
+                                    {{ preview.statement.bank_name }}
+                                {% else %}
+                                    Banco {{ preview.statement.bank_id|default:"não identificado" }}
+                                {% endif %}
+                            </div>
+
+                            <div class="small text-secondary">
+                                BANKID: {{ preview.statement.bank_id|default:"—" }}
+                                · Agência: {{ preview.statement.branch_id|default:"—" }}
+                                · ACCTID: {{ preview.statement.account_id|default:"—" }}
+                                · Moeda: {{ preview.statement.currency|default:"—" }}
+                            </div>
+                        </div>
+
+                        <div>
+                            {% if preview.match.is_complete %}
+                                <span class="badge text-bg-success">
+                                    Conta reconhecida
+                                </span>
+                            {% elif preview.match.bank %}
+                                <span class="badge text-bg-warning">
+                                    Banco reconhecido; conta não encontrada
+                                </span>
+                            {% else %}
+                                <span class="badge text-bg-secondary">
+                                    Não relacionado
+                                </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card-body">
+                    <div class="row g-3">
+
+                        <div class="col-12 col-md-3">
+                            <div class="small text-secondary">Período</div>
+                            <div>
+                                {% if preview.statement.start %}
+                                    {{ preview.statement.start|date:"d/m/Y" }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                                até
+                                {% if preview.statement.end %}
+                                    {{ preview.statement.end|date:"d/m/Y" }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <div class="col-12 col-md-3">
+                            <div class="small text-secondary">Saldo do extrato</div>
+                            <div data-sensitive-value>
+                                {% if preview.statement.ledger_balance != None %}
+                                    R$ {{ preview.statement.ledger_balance|floatformat:2 }}
+                                {% else %}
+                                    —
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <div class="col-12 col-md-3">
+                            <div class="small text-secondary">Créditos</div>
+                            <div data-sensitive-value>
+                                R$ {{ preview.statement.total_credits|floatformat:2 }}
+                            </div>
+                        </div>
+
+                        <div class="col-12 col-md-3">
+                            <div class="small text-secondary">Débitos</div>
+                            <div data-sensitive-value>
+                                R$ {{ preview.statement.total_debits|floatformat:2 }}
+                            </div>
+                        </div>
+
+                        {% if preview.match.bank %}
+                            <div class="col-12">
+                                <div class="alert alert-light border mb-0">
+                                    <strong>Correspondência local:</strong>
+                                    {{ preview.match.bank.name }}
+                                    {% if preview.match.account %}
+                                        → {{ preview.match.account.nickname }}
+                                        ({{ preview.match.account.formatted_number }})
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endif %}
+
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Data</th>
+                                <th>FITID</th>
+                                <th>Tipo OFX</th>
+                                <th>Descrição</th>
+                                <th class="text-end">Valor</th>
+                            </tr>
+                        </thead>
+
+                        <tbody>
+                        {% for transaction in preview.statement.transactions %}
+                            <tr>
+                                <td class="text-nowrap">
+                                    {% if transaction.posted_at_has_time %}
+                                        {{ transaction.posted_at|date:"d/m/Y H:i" }}
+                                    {% else %}
+                                        {{ transaction.posted_at|date:"d/m/Y" }}
+                                        <div class="small text-secondary">
+                                            horário não informado
+                                        </div>
+                                    {% endif %}
+
+                                    {% if transaction.posted_at_raw %}
+                                        <div class="small text-secondary">
+                                            DTPOSTED: {{ transaction.posted_at_raw }}
+                                        </div>
+                                    {% endif %}
+                                </td>
+
+                                <td class="text-nowrap">
+                                    {{ transaction.fitid|default:"—" }}
+                                </td>
+
+                                <td>
+                                    {{ transaction.transaction_type|default:"—" }}
+                                </td>
+
+                                <td class="transaction-description">
+                                    {{ transaction.description|default:"—" }}
+                                </td>
+
+                                <td
+                                    class="text-end text-nowrap fw-semibold"
+                                    data-sensitive-value
+                                >
+                                    {% if transaction.is_credit %}
+                                        + R$ {{ transaction.absolute_amount|floatformat:2 }}
+                                    {% elif transaction.is_debit %}
+                                        - R$ {{ transaction.absolute_amount|floatformat:2 }}
+                                    {% else %}
+                                        R$ 0,00
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr>
+                                <td colspan="5" class="text-center py-4 text-secondary">
+                                    Nenhum lançamento encontrado neste extrato.
+                                </td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+            </div>
+        {% endfor %}
+    {% endif %}
+
+</div>
+{% endblock %}

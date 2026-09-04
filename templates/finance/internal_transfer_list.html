@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% load finance_extras %}
+
+{% block title %}Transferências internas | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">
+                Transferências entre minhas contas
+            </h1>
+            <p class="text-secondary mb-0">
+                O extrato original permanece intacto. Esta tela apenas relaciona
+                a saída de uma conta própria com a entrada correspondente em outra.
+            </p>
+        </div>
+
+        <form
+            method="post"
+            action="{% url 'finance:internal-transfer-analyze' %}"
+        >
+            {% csrf_token %}
+            <button
+                type="submit"
+                class="btn btn-primary"
+            >
+                Analisar movimentações
+            </button>
+        </form>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-md-4">
+            <a
+                href="?status=POSSIBLE"
+                class="card border-0 shadow-sm text-decoration-none h-100"
+            >
+                <div class="card-body">
+                    <div class="small text-secondary">
+                        Aguardando revisão
+                    </div>
+                    <div class="fs-3 fw-semibold text-dark">
+                        {{ possible_count }}
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <div class="col-12 col-md-4">
+            <a
+                href="?status=CONFIRMED"
+                class="card border-0 shadow-sm text-decoration-none h-100"
+            >
+                <div class="card-body">
+                    <div class="small text-secondary">
+                        Confirmadas
+                    </div>
+                    <div class="fs-3 fw-semibold text-dark">
+                        {{ confirmed_count }}
+                    </div>
+                </div>
+            </a>
+        </div>
+
+        <div class="col-12 col-md-4">
+            <a
+                href="?status=REJECTED"
+                class="card border-0 shadow-sm text-decoration-none h-100"
+            >
+                <div class="card-body">
+                    <div class="small text-secondary">
+                        Rejeitadas
+                    </div>
+                    <div class="fs-3 fw-semibold text-dark">
+                        {{ rejected_count }}
+                    </div>
+                </div>
+            </a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+                <div class="col-12 col-md-5">
+                    <label
+                        for="status"
+                        class="form-label"
+                    >
+                        Situação
+                    </label>
+
+                    <select
+                        id="status"
+                        name="status"
+                        class="form-select"
+                    >
+                        {% for value, label in status_choices %}
+                            <option
+                                value="{{ value }}"
+                                {% if status_filter == value %}selected{% endif %}
+                            >
+                                {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-3 d-grid">
+                    <button
+                        type="submit"
+                        class="btn btn-outline-secondary"
+                    >
+                        Filtrar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {% if status_filter == "POSSIBLE" %}
+        <div class="alert alert-warning">
+            Uma sugestão não é retirada das entradas/saídas externas até você
+            confirmar. Valor igual, sozinho, nunca é usado como prova.
+        </div>
+    {% elif status_filter == "CONFIRMED" %}
+        <div class="alert alert-info">
+            Vínculos confirmados deixam de compor receita/despesa externa no
+            Dashboard, mas as duas movimentações bancárias continuam gravadas.
+        </div>
+    {% endif %}
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Saída</th>
+                        <th>Entrada</th>
+                        <th class="text-end">Valor</th>
+                        <th>Confiança</th>
+                        <th>Evidências</th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                {% for transfer in transfers %}
+                    <tr>
+                        <td>
+                            <div class="fw-semibold">
+                                {{ transfer.debit_transaction.account.bank.name }}
+                                · {{ transfer.debit_transaction.account.nickname }}
+                            </div>
+                            <div class="small">
+                                {{ transfer.debit_transaction.posted_at|date:"d/m/Y H:i" }}
+                            </div>
+                            <div class="small text-secondary">
+                                {{ transfer.debit_transaction.description }}
+                            </div>
+                            {% if transfer.debit_transaction.fitid %}
+                                <div class="small text-secondary">
+                                    FITID: {{ transfer.debit_transaction.fitid }}
+                                </div>
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            <div class="fw-semibold">
+                                {{ transfer.credit_transaction.account.bank.name }}
+                                · {{ transfer.credit_transaction.account.nickname }}
+                            </div>
+                            <div class="small">
+                                {{ transfer.credit_transaction.posted_at|date:"d/m/Y H:i" }}
+                            </div>
+                            <div class="small text-secondary">
+                                {{ transfer.credit_transaction.description }}
+                            </div>
+                            {% if transfer.credit_transaction.fitid %}
+                                <div class="small text-secondary">
+                                    FITID: {{ transfer.credit_transaction.fitid }}
+                                </div>
+                            {% endif %}
+                        </td>
+
+                        <td
+                            class="text-end fw-semibold text-nowrap"
+                            data-sensitive-value
+                        >
+                            {{ transfer.amount|brl }}
+                        </td>
+
+                        <td>
+                            <div class="fw-semibold">
+                                {{ transfer.confidence }}%
+                            </div>
+                            <div class="small text-secondary">
+                                {{ transfer.get_match_method_display }}
+                            </div>
+                        </td>
+
+                        <td>
+                            {% for reason in transfer.match_reasons %}
+                                <div class="small">
+                                    • {{ reason }}
+                                </div>
+                            {% empty %}
+                                <span class="text-secondary">
+                                    —
+                                </span>
+                            {% endfor %}
+                        </td>
+
+                        <td class="text-end text-nowrap">
+                            {% if transfer.status == "POSSIBLE" %}
+                                <form
+                                    method="post"
+                                    action="{% url 'finance:internal-transfer-confirm' transfer.pk %}"
+                                    class="d-inline"
+                                >
+                                    {% csrf_token %}
+                                    <button
+                                        type="submit"
+                                        class="btn btn-sm btn-success"
+                                    >
+                                        Confirmar
+                                    </button>
+                                </form>
+
+                                <form
+                                    method="post"
+                                    action="{% url 'finance:internal-transfer-reject' transfer.pk %}"
+                                    class="d-inline"
+                                >
+                                    {% csrf_token %}
+                                    <button
+                                        type="submit"
+                                        class="btn btn-sm btn-outline-danger"
+                                    >
+                                        Não é interna
+                                    </button>
+                                </form>
+                            {% elif transfer.status == "CONFIRMED" %}
+                                <form
+                                    method="post"
+                                    action="{% url 'finance:internal-transfer-undo' transfer.pk %}"
+                                    class="d-inline"
+                                >
+                                    {% csrf_token %}
+                                    <button
+                                        type="submit"
+                                        class="btn btn-sm btn-outline-danger"
+                                    >
+                                        Desfazer vínculo
+                                    </button>
+                                </form>
+                            {% else %}
+                                <span class="small text-secondary">
+                                    Rejeitada
+                                </span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td
+                            colspan="6"
+                            class="text-center py-5 text-secondary"
+                        >
+                            Nenhuma transferência nesta situação.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% load query_extras %}
+
+{% block title %}Bancos | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Bancos</h1>
+            <p class="text-secondary mb-0">
+                Cadastre as instituições que serão relacionadas aos arquivos OFX.
+            </p>
+        </div>
+
+        <div>
+            <a
+                href="{% url 'finance:bank-create' %}"
+                class="btn btn-primary"
+            >
+                Novo banco
+            </a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+                <div class="col-12 col-lg-7">
+                    <label for="q" class="form-label">Pesquisar</label>
+                    <input
+                        id="q"
+                        name="q"
+                        value="{{ query }}"
+                        class="form-control"
+                        placeholder="Nome, COMPE ou BANKID"
+                    >
+                </div>
+
+                <div class="col-12 col-md-6 col-lg-3">
+                    <label for="status" class="form-label">Situação</label>
+                    <select
+                        id="status"
+                        name="status"
+                        class="form-select"
+                    >
+                        <option value="active" {% if status_filter == "active" %}selected{% endif %}>
+                            Ativos
+                        </option>
+                        <option value="inactive" {% if status_filter == "inactive" %}selected{% endif %}>
+                            Inativos
+                        </option>
+                        <option value="all" {% if status_filter == "all" %}selected{% endif %}>
+                            Todos
+                        </option>
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-lg-2 d-grid">
+                    <button class="btn btn-outline-secondary" type="submit">
+                        Filtrar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th><a class="table-sort-link" href="{% sort_url 'name' %}">Banco <span class="sort-icon">{% sort_icon 'name' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'code' %}">COMPE <span class="sort-icon">{% sort_icon 'code' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'ofx' %}">BANKID OFX <span class="sort-icon">{% sort_icon 'ofx' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'status' %}">Situação <span class="sort-icon">{% sort_icon 'status' %}</span></a></th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                {% for bank in banks %}
+                    <tr>
+                        <td class="fw-semibold">
+                            {{ bank.name }}
+                        </td>
+
+                        <td>
+                            {{ bank.code|default:"—" }}
+                        </td>
+
+                        <td>
+                            {{ bank.ofx_bank_id|default:"—" }}
+                        </td>
+
+                        <td>
+                            {% if bank.is_active %}
+                                <span class="badge text-bg-success">Ativo</span>
+                            {% else %}
+                                <span class="badge text-bg-secondary">Inativo</span>
+                            {% endif %}
+                        </td>
+
+                        <td class="text-end text-nowrap">
+                            <a
+                                href="{% url 'finance:bank-update' bank.pk %}"
+                                class="btn btn-sm btn-outline-primary"
+                            >
+                                Editar
+                            </a>
+
+                            <form
+                                method="post"
+                                action="{% url 'finance:bank-toggle-active' bank.pk %}"
+                                class="d-inline"
+                            >
+                                {% csrf_token %}
+                                <button
+                                    type="submit"
+                                    class="btn btn-sm {% if bank.is_active %}btn-outline-danger{% else %}btn-outline-success{% endif %}"
+                                >
+                                    {% if bank.is_active %}
+                                        Desativar
+                                    {% else %}
+                                        Ativar
+                                    {% endif %}
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center py-5 text-secondary">
+                            Nenhum banco encontrado.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% include "finance/includes/pagination.html" %}
+    </div>
+
+</div>
+{% endblock %}

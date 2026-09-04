@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Editar importação #{{ batch.pk }} | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">
+            Editar / reprocessar importação #{{ batch.pk }}
+        </h1>
+
+        <p class="text-secondary mb-0">
+            O sistema desfará os efeitos financeiros atuais do lote,
+            analisará novamente os OFXs e permitirá uma nova confirmação.
+        </p>
+    </div>
+
+    <div class="alert alert-warning">
+        Se esta importação atualizou uma movimentação existente, o valor anterior
+        será restaurado antes do novo processamento. Se ela criou uma movimentação,
+        essa movimentação será removida antes da nova análise.
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-header bg-white py-3 fw-semibold">
+            Arquivos atuais
+        </div>
+
+        <ul class="list-group list-group-flush">
+            {% for import_file in files %}
+                <li class="list-group-item d-flex justify-content-between gap-3">
+                    <span>{{ import_file.original_name }}</span>
+                    <span class="text-secondary small">
+                        {{ import_file.get_status_display }}
+                    </span>
+                </li>
+            {% empty %}
+                <li class="list-group-item text-secondary">
+                    Nenhum arquivo armazenado.
+                </li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+
+            <form method="post" enctype="multipart/form-data" novalidate>
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">
+                        {{ form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="mb-4">
+                    <label
+                        for="{{ form.files.id_for_label }}"
+                        class="form-label"
+                    >
+                        {{ form.files.label }}
+                    </label>
+
+                    {{ form.files }}
+
+                    <div class="form-text">
+                        {{ form.files.help_text }}
+                    </div>
+
+                    {% for error in form.files.errors %}
+                        <div class="text-danger small mt-1">
+                            {{ error }}
+                        </div>
+                    {% endfor %}
+                </div>
+
+                <div class="form-check mb-4">
+                    {{ form.confirm_reprocess }}
+
+                    <label
+                        for="{{ form.confirm_reprocess.id_for_label }}"
+                        class="form-check-label"
+                    >
+                        {{ form.confirm_reprocess.label }}
+                    </label>
+
+                    {% for error in form.confirm_reprocess.errors %}
+                        <div class="text-danger small mt-1">
+                            {{ error }}
+                        </div>
+                    {% endfor %}
+                </div>
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        Reprocessar importação
+                    </button>
+
+                    <a
+                        href="{% url 'imports:batch-detail' batch.pk %}"
+                        class="btn btn-outline-secondary"
+                    >
+                        Cancelar
+                    </a>
+                </div>
+            </form>
+
+        </div>
+    </div>
+
+</div>
+{% endblock %}

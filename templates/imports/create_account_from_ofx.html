@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Cadastrar conta pelo OFX | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">
+            Cadastrar banco/conta usando o OFX
+        </h1>
+
+        <p class="text-secondary mb-0">
+            Confira os dados encontrados no arquivo antes de confirmar.
+        </p>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-12 col-md-4">
+                    <div class="small text-secondary">BANKID</div>
+                    <div class="fw-semibold">
+                        {{ statement.bank_id|default:"—" }}
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-4">
+                    <div class="small text-secondary">Agência</div>
+                    <div class="fw-semibold">
+                        {{ statement.branch_id|default:"—" }}
+                    </div>
+                </div>
+
+                <div class="col-12 col-md-4">
+                    <div class="small text-secondary">ACCTID</div>
+                    <div class="fw-semibold">
+                        {{ statement.account_id|default:"—" }}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">
+                        {{ form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="row g-3">
+
+                    <div class="col-12 col-lg-7">
+                        <label for="{{ form.bank_name.id_for_label }}" class="form-label">
+                            {{ form.bank_name.label }}
+                        </label>
+                        {{ form.bank_name }}
+                    </div>
+
+                    <div class="col-12 col-md-5 col-lg-2">
+                        <label for="{{ form.bank_code.id_for_label }}" class="form-label">
+                            {{ form.bank_code.label }}
+                        </label>
+                        {{ form.bank_code }}
+                    </div>
+
+                    <div class="col-12 col-md-7 col-lg-3">
+                        <label for="{{ form.bank_ofx_id.id_for_label }}" class="form-label">
+                            {{ form.bank_ofx_id.label }}
+                        </label>
+                        {{ form.bank_ofx_id }}
+                    </div>
+
+                    <div class="col-12 col-lg-5">
+                        <label for="{{ form.nickname.id_for_label }}" class="form-label">
+                            {{ form.nickname.label }}
+                        </label>
+                        {{ form.nickname }}
+                    </div>
+
+                    <div class="col-12 col-md-4 col-lg-2">
+                        <label for="{{ form.branch.id_for_label }}" class="form-label">
+                            {{ form.branch.label }}
+                        </label>
+                        {{ form.branch }}
+                    </div>
+
+                    <div class="col-12 col-md-8 col-lg-3">
+                        <label for="{{ form.number.id_for_label }}" class="form-label">
+                            {{ form.number.label }}
+                        </label>
+                        {{ form.number }}
+                    </div>
+
+                    <div class="col-12 col-lg-2">
+                        <label for="{{ form.currency.id_for_label }}" class="form-label">
+                            {{ form.currency.label }}
+                        </label>
+                        {{ form.currency }}
+                    </div>
+
+                    <div class="col-12 col-md-6">
+                        <label for="{{ form.account_type.id_for_label }}" class="form-label">
+                            {{ form.account_type.label }}
+                        </label>
+                        {{ form.account_type }}
+                    </div>
+
+                    {% for field in form %}
+                        {% if field.errors %}
+                            <div class="col-12">
+                                {% for error in field.errors %}
+                                    <div class="text-danger small">
+                                        {{ field.label }}: {{ error }}
+                                    </div>
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    {% endfor %}
+
+                    <div class="col-12">
+                        <div class="form-check mt-2">
+                            {{ form.commit_after_create }}
+
+                            <label
+                                for="{{ form.commit_after_create.id_for_label }}"
+                                class="form-check-label"
+                            >
+                                {{ form.commit_after_create.label }}
+                            </label>
+                        </div>
+                    </div>
+
+                </div>
+
+                <hr class="my-4">
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        Cadastrar, vincular e continuar
+                    </button>
+
+                    <a
+                        href="{% url 'imports:batch-detail' batch.pk %}"
+                        class="btn btn-outline-secondary"
+                    >
+                        Cancelar
+                    </a>
+                </div>
+            </form>
+
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,177 @@
+{% extends "base.html" %}
+
+{% block title %}
+    {% if object %}Editar movimentação{% else %}Nova movimentação{% endif %} | Financeiro OFX
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+
+    <div class="mb-4">
+        <h1 class="h3 mb-1">
+            {% if object %}Editar movimentação{% else %}Nova movimentação{% endif %}
+        </h1>
+
+        <p class="text-secondary mb-0">
+            Cadastro manual para validar o modelo canônico antes da importação OFX.
+        </p>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                {% if form.non_field_errors %}
+                    <div class="alert alert-danger">
+                        {{ form.non_field_errors }}
+                    </div>
+                {% endif %}
+
+                <div class="row g-3">
+
+                    <div class="col-12 col-lg-6">
+                        <label for="{{ form.account.id_for_label }}" class="form-label">
+                            {{ form.account.label }}
+                        </label>
+                        {{ form.account }}
+                        {% for error in form.account.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-6 col-lg-3">
+                        <label for="{{ form.posted_at.id_for_label }}" class="form-label">
+                            {{ form.posted_at.label }}
+                        </label>
+                        {{ form.posted_at }}
+                        {% for error in form.posted_at.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-6 col-lg-3">
+                        <label for="{{ form.competence_date.id_for_label }}" class="form-label">
+                            {{ form.competence_date.label }}
+                        </label>
+                        {{ form.competence_date }}
+                        {% for error in form.competence_date.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.amount.id_for_label }}" class="form-label">
+                            {{ form.amount.label }}
+                        </label>
+                        {{ form.amount }}
+                        {% for error in form.amount.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.direction.id_for_label }}" class="form-label">
+                            {{ form.direction.label }}
+                        </label>
+                        {{ form.direction }}
+                        {% for error in form.direction.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.transaction_type.id_for_label }}" class="form-label">
+                            {{ form.transaction_type.label }}
+                        </label>
+                        {{ form.transaction_type }}
+                        {% for error in form.transaction_type.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12">
+                        <label for="{{ form.raw_description.id_for_label }}" class="form-label">
+                            {{ form.raw_description.label }}
+                        </label>
+                        {{ form.raw_description }}
+                        {% for error in form.raw_description.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.document.id_for_label }}" class="form-label">
+                            {{ form.document.label }}
+                        </label>
+                        {{ form.document }}
+                        {% for error in form.document.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.reference.id_for_label }}" class="form-label">
+                            {{ form.reference.label }}
+                        </label>
+                        {{ form.reference }}
+                        {% for error in form.reference.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.counterparty.id_for_label }}" class="form-label">
+                            {{ form.counterparty.label }}
+                        </label>
+                        {{ form.counterparty }}
+                        {% for error in form.counterparty.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.category.id_for_label }}" class="form-label">
+                            {{ form.category.label }}
+                        </label>
+                        {{ form.category }}
+                        {% for error in form.category.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12">
+                        <label for="{{ form.notes.id_for_label }}" class="form-label">
+                            {{ form.notes.label }}
+                        </label>
+                        {{ form.notes }}
+                        {% for error in form.notes.errors %}
+                            <div class="text-danger small mt-1">{{ error }}</div>
+                        {% endfor %}
+                    </div>
+
+                </div>
+
+                <hr class="my-4">
+
+                <div class="d-flex gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        Salvar
+                    </button>
+
+                    <a
+                        href="{% url 'finance:transaction-list' %}"
+                        class="btn btn-outline-secondary"
+                    >
+                        Cancelar
+                    </a>
+                </div>
+
+            </form>
+
+        </div>
+    </div>
+
+</div>
+{% endblock %}

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Importar extrato | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Importar extrato</h1>
+            <p class="text-secondary mb-0">
+                Selecione um ou vários arquivos OFX/QFX. Também é possível
+                importar PDF de extrato Mercado Pago e CSV de relatório obtido
+                pela integração. Primeiro o conteúdo é analisado e classificado;
+                a gravação ocorre somente depois da sua confirmação.
+            </p>
+        </div>
+
+        <div>
+            <a
+                href="{% url 'imports:history' %}"
+                class="btn btn-outline-secondary"
+            >
+                Histórico de importações
+            </a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body p-4">
+
+            <form method="post" enctype="multipart/form-data" novalidate>
+                {% csrf_token %}
+
+                <div class="row g-3">
+                    <div class="col-12 col-lg-9">
+                        <label
+                            for="{{ form.files.id_for_label }}"
+                            class="form-label"
+                        >
+                            {{ form.files.label }}
+                        </label>
+
+                        {{ form.files }}
+
+                        {% for error in form.files.errors %}
+                            <div class="text-danger small mt-2">
+                                {{ error }}
+                            </div>
+                        {% endfor %}
+                    </div>
+
+                    <div class="col-12 col-lg-3 d-flex align-items-end">
+                        <button
+                            type="submit"
+                            class="btn btn-primary w-100"
+                        >
+                            Analisar para importação
+                        </button>
+                    </div>
+                </div>
+
+                {% if form.files.help_text %}
+                    <div class="form-text mt-2">
+                        {{ form.files.help_text }}
+                    </div>
+                {% endif %}
+            </form>
+
+        </div>
+    </div>
+
+    {% if recent_batches %}
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white py-3">
+                <div class="fw-semibold">
+                    Importações recentes
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Lote</th>
+                            <th>Data</th>
+                            <th>Situação</th>
+                            <th class="text-end">Ação</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for batch in recent_batches %}
+                        <tr>
+                            <td>#{{ batch.pk }}</td>
+                            <td>{{ batch.created_at|date:"d/m/Y H:i" }}</td>
+                            <td>{{ batch.get_status_display }}</td>
+                            <td class="text-end">
+                                <a
+                                    href="{% url 'imports:batch-detail' batch.pk %}"
+                                    class="btn btn-sm btn-outline-primary"
+                                >
+                                    Abrir
+                                </a>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+</div>
+{% endblock %}

@@ -1,0 +1,226 @@
+{% load static %}
+
+<!doctype html>
+<html lang="pt-br">
+<head>
+    <meta charset="utf-8">
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1"
+    >
+
+    <title>{% block title %}Financeiro OFX{% endblock %}</title>
+
+    <link
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+        rel="stylesheet"
+        integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+        crossorigin="anonymous"
+    >
+
+    <link
+        rel="stylesheet"
+        href="{% static 'css/app.css' %}"
+    >
+
+    {% block extra_css %}{% endblock %}
+</head>
+
+<body>
+
+{% if user.is_authenticated %}
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark shadow-sm">
+    <div class="container-fluid px-4">
+
+        <a
+            class="navbar-brand fw-semibold"
+            href="{% url 'home' %}"
+        >
+            Financeiro OFX
+        </a>
+
+        <button
+            class="navbar-toggler"
+            type="button"
+            data-bs-toggle="collapse"
+            data-bs-target="#navbarPrincipal"
+            aria-controls="navbarPrincipal"
+            aria-expanded="false"
+            aria-label="Abrir navegação"
+        >
+            <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <div
+            class="collapse navbar-collapse"
+            id="navbarPrincipal"
+        >
+            <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'home' %}"
+                    >
+                        Dashboard
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'finance:transaction-list' %}"
+                    >
+                        Movimentações
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'imports:upload' %}"
+                    >
+                        Importar extrato
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'imports:history' %}"
+                    >
+                        Importações
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'finance:ofx-preview' %}"
+                    >
+                        Analisar OFX
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'finance:internal-transfer-list' %}"
+                    >
+                        Transferências internas
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'finance:counterparty-list' %}"
+                    >
+                        Pessoas
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'integrations:list' %}"
+                    >
+                        Integrações
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'finance:bank-list' %}"
+                    >
+                        Bancos
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'finance:account-list' %}"
+                    >
+                        Contas
+                    </a>
+                </li>
+
+            </ul>
+
+            <div class="d-flex align-items-center gap-3 text-white">
+                <button
+                    id="toggleSensitiveValues"
+                    type="button"
+                    class="btn btn-outline-light btn-sm"
+                    aria-pressed="false"
+                    title="Ocultar ou mostrar valores financeiros"
+                >
+                    Ocultar valores
+                </button>
+
+                <span class="small">
+                    {% if user.get_full_name %}
+                        {{ user.get_full_name }}
+                    {% else %}
+                        {{ user.username }}
+                    {% endif %}
+                </span>
+
+                <form
+                    method="post"
+                    action="{% url 'logout' %}"
+                    class="m-0"
+                >
+                    {% csrf_token %}
+
+                    <button
+                        type="submit"
+                        class="btn btn-outline-light btn-sm"
+                    >
+                        Sair
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</nav>
+{% endif %}
+
+{% if messages %}
+<div class="container-fluid px-4 pt-3">
+    {% for message in messages %}
+        <div
+            class="alert alert-{{ message.tags|default:'info' }} alert-dismissible fade show"
+            role="alert"
+        >
+            {{ message }}
+
+            <button
+                type="button"
+                class="btn-close"
+                data-bs-dismiss="alert"
+                aria-label="Fechar"
+            ></button>
+        </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<main>
+    {% block content %}{% endblock %}
+</main>
+
+<script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+    crossorigin="anonymous"
+></script>
+
+<script src="{% static 'js/privacy.js' %}"></script>
+
+{% block extra_js %}{% endblock %}
+
+</body>
+</html>

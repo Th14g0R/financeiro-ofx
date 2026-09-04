@@ -1,0 +1,340 @@
+{% extends "base.html" %}
+{% load query_extras finance_extras %}
+
+{% block title %}Movimentações | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Movimentações</h1>
+            <p class="text-secondary mb-0">
+                Extrato canônico de todos os bancos, com separação entre movimentos externos e transferências entre contas próprias.
+            </p>
+        </div>
+
+        <div class="d-flex gap-2">
+            <a
+                href="{% url 'finance:internal-transfer-list' %}"
+                class="btn btn-outline-primary"
+            >
+                Transferências internas
+            </a>
+
+            <a
+                href="{% url 'finance:transaction-create' %}"
+                class="btn btn-primary"
+            >
+                Nova movimentação
+            </a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+
+                <div class="col-12 col-xl-4">
+                    <label for="q" class="form-label">Pesquisar</label>
+                    <input
+                        id="q"
+                        name="q"
+                        value="{{ query }}"
+                        class="form-control"
+                        placeholder="Descrição, documento, FITID, conta ou banco"
+                    >
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="bank" class="form-label">Banco</label>
+                    <select id="bank" name="bank" class="form-select">
+                        <option value="">Todos</option>
+                        {% for bank in banks %}
+                            <option
+                                value="{{ bank.pk }}"
+                                {% if bank_filter == bank.pk|stringformat:"s" %}selected{% endif %}
+                            >
+                                {{ bank.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="account" class="form-label">Conta</label>
+                    <select id="account" name="account" class="form-select">
+                        <option value="">Todas</option>
+                        {% for account in accounts %}
+                            <option
+                                value="{{ account.pk }}"
+                                {% if account_filter == account.pk|stringformat:"s" %}selected{% endif %}
+                            >
+                                {{ account.bank.name }} — {{ account.nickname }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="direction" class="form-label">Natureza</label>
+                    <select id="direction" name="direction" class="form-select">
+                        <option value="">Todas</option>
+                        {% for value, label in direction_choices %}
+                            <option
+                                value="{{ value }}"
+                                {% if direction_filter == value %}selected{% endif %}
+                            >
+                                {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="type" class="form-label">Tipo</label>
+                    <select id="type" name="type" class="form-select">
+                        <option value="">Todos</option>
+                        {% for value, label in type_choices %}
+                            <option
+                                value="{{ value }}"
+                                {% if type_filter == value %}selected{% endif %}
+                            >
+                                {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="source" class="form-label">Origem</label>
+                    <select id="source" name="source" class="form-select">
+                        <option value="">Todas</option>
+                        {% for value, label in source_choices %}
+                            <option
+                                value="{{ value }}"
+                                {% if source_filter == value %}selected{% endif %}
+                            >
+                                {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="scope" class="form-label">
+                        Classificação
+                    </label>
+                    <select
+                        id="scope"
+                        name="scope"
+                        class="form-select"
+                    >
+                        <option value="">
+                            Todas
+                        </option>
+                        {% for value, label in scope_choices %}
+                            <option
+                                value="{{ value }}"
+                                {% if scope_filter == value %}selected{% endif %}
+                            >
+                                {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="date_from" class="form-label">De</label>
+                    <input
+                        id="date_from"
+                        name="date_from"
+                        type="date"
+                        value="{{ date_from }}"
+                        class="form-control"
+                    >
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="date_to" class="form-label">Até</label>
+                    <input
+                        id="date_to"
+                        name="date_to"
+                        type="date"
+                        value="{{ date_to }}"
+                        class="form-control"
+                    >
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2 d-grid">
+                    <button class="btn btn-outline-secondary" type="submit">
+                        Filtrar
+                    </button>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2 d-grid">
+                    <a
+                        href="{% url 'finance:transaction-list' %}"
+                        class="btn btn-outline-dark"
+                    >
+                        Limpar
+                    </a>
+                </div>
+
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th><a class="table-sort-link" href="{% sort_url 'date' %}">Data <span class="sort-icon">{% sort_icon 'date' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'bank' %}">Banco / conta <span class="sort-icon">{% sort_icon 'bank' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'description' %}">Descrição <span class="sort-icon">{% sort_icon 'description' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'type' %}">Tipo <span class="sort-icon">{% sort_icon 'type' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'source' %}">Origem <span class="sort-icon">{% sort_icon 'source' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'scope' %}">Classificação <span class="sort-icon">{% sort_icon 'scope' %}</span></a></th>
+                        <th class="text-end"><a class="table-sort-link" href="{% sort_url 'amount' %}">Valor <span class="sort-icon">{% sort_icon 'amount' %}</span></a></th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+
+                <tbody>
+                {% for transaction in transactions %}
+                    <tr>
+                        <td class="text-nowrap">
+                            {% if transaction.source_type == "OFX" and not transaction.ofx_time_was_supplied %}
+                                {{ transaction.posted_at|date:"d/m/Y" }}
+                                <div class="small text-secondary">
+                                    sem horário no OFX
+                                </div>
+                            {% else %}
+                                {{ transaction.posted_at|date:"d/m/Y H:i" }}
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            <div class="fw-semibold">
+                                {{ transaction.account.bank.name }}
+                            </div>
+                            <div class="small text-secondary">
+                                {{ transaction.account.nickname }}
+                            </div>
+                        </td>
+
+                        <td class="transaction-description">
+                            <div>
+                                {{ transaction.description }}
+                            </div>
+
+                            {% if transaction.counterparty %}
+                                <div class="small">
+                                    <a
+                                        href="{% url 'finance:counterparty-detail' transaction.counterparty.pk %}"
+                                        class="text-decoration-none"
+                                    >
+                                        {{ transaction.counterparty.display_name }}
+                                    </a>
+                                </div>
+                            {% endif %}
+
+                            {% if transaction.fitid %}
+                                <div class="small text-secondary">
+                                    FITID: {{ transaction.fitid }}
+                                </div>
+                            {% endif %}
+                        </td>
+
+                        <td>
+                            {{ transaction.get_transaction_type_display }}
+                        </td>
+
+                        <td>
+                            {{ transaction.get_source_type_display }}
+                        </td>
+
+                        <td>
+                            {% if transaction.is_internal_transfer %}
+                                <span class="badge text-bg-info">
+                                    Transferência interna
+                                </span>
+                            {% elif transaction.is_possible_internal_transfer %}
+                                <span class="badge text-bg-warning">
+                                    Possível interna
+                                </span>
+                            {% else %}
+                                <span class="badge text-bg-light border text-dark">
+                                    Externa
+                                </span>
+                            {% endif %}
+                        </td>
+
+                        <td
+                            class="text-end text-nowrap fw-semibold"
+                            data-sensitive-value
+                        >
+                            {{ transaction.signed_amount|brl_signed }}
+                        </td>
+
+                        <td class="text-end">
+                            {% if transaction.source_type == "MANUAL" %}
+                                <a
+                                    href="{% url 'finance:transaction-update' transaction.pk %}"
+                                    class="btn btn-sm btn-outline-primary"
+                                >
+                                    Editar
+                                </a>
+                            {% else %}
+                                <span class="small text-secondary">
+                                    Somente leitura
+                                </span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="8" class="text-center py-5 text-secondary">
+                            Nenhuma movimentação encontrada.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if is_paginated %}
+        <div class="card-footer bg-white border-0 py-3">
+            <nav aria-label="Paginação">
+                <ul class="pagination justify-content-end mb-0">
+                    {% if page_obj.has_previous %}
+                        <li class="page-item">
+                            <a class="page-link" href="{% querystring page=page_obj.previous_page_number %}">
+                                Anterior
+                            </a>
+                        </li>
+                    {% endif %}
+
+                    <li class="page-item disabled">
+                        <span class="page-link">
+                            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
+                        </span>
+                    </li>
+
+                    {% if page_obj.has_next %}
+                        <li class="page-item">
+                            <a class="page-link" href="{% querystring page=page_obj.next_page_number %}">
+                                Próxima
+                            </a>
+                        </li>
+                    {% endif %}
+                </ul>
+            </nav>
+        </div>
+        {% endif %}
+
+    </div>
+
+</div>
+{% endblock %}

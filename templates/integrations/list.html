@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+{% load query_extras %}
+
+{% block title %}Integrações | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Integrações bancárias</h1>
+            <p class="text-secondary mb-0">
+                Conecte provedores que disponibilizam extratos ou relatórios via API.
+            </p>
+        </div>
+
+        <a
+            href="{% url 'integrations:create' %}"
+            class="btn btn-primary"
+        >
+            Nova integração
+        </a>
+    </div>
+
+    <div class="alert alert-info">
+        <div class="fw-semibold mb-1">
+            Mercado Pago — configuração recomendada
+        </div>
+
+        <div>
+            Para sua própria conta, use
+            <strong>Client ID + Client Secret</strong>.
+            O Financeiro OFX solicita o Access Token temporário no servidor,
+            armazena-o criptografado e o renova quando necessário.
+            A Public Key não é necessária para o relatório bancário.
+        </div>
+
+        <div class="small mt-2">
+            O relatório é gerado de forma assíncrona:
+            solicite o período, aguarde o arquivo aparecer e depois envie-o
+            para o staging para revisão.
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'name' %}">
+                                Nome <span class="sort-icon">{% sort_icon 'name' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'provider' %}">
+                                Provedor <span class="sort-icon">{% sort_icon 'provider' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'account' %}">
+                                Conta local <span class="sort-icon">{% sort_icon 'account' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'auth' %}">
+                                Autenticação <span class="sort-icon">{% sort_icon 'auth' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'status' %}">
+                                Situação <span class="sort-icon">{% sort_icon 'status' %}</span>
+                            </a>
+                        </th>
+                        <th>
+                            <a class="table-sort-link" href="{% sort_url 'sync' %}">
+                                Última sincronização <span class="sort-icon">{% sort_icon 'sync' %}</span>
+                            </a>
+                        </th>
+                        <th class="text-end">Ações</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for integration in integrations %}
+                    <tr>
+                        <td class="fw-semibold">
+                            {{ integration.name }}
+                        </td>
+                        <td>
+                            {{ integration.get_provider_display }}
+                        </td>
+                        <td>
+                            {{ integration.account.bank.name }}
+                            · {{ integration.account.nickname }}
+                        </td>
+                        <td>
+                            {{ integration.get_auth_mode_display }}
+                        </td>
+                        <td>
+                            {% if integration.status == "OK" %}
+                                <span class="badge text-bg-success">Conectada</span>
+                            {% elif integration.status == "ERROR" %}
+                                <span class="badge text-bg-danger">Erro</span>
+                            {% else %}
+                                <span class="badge text-bg-secondary">Não testada</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if integration.last_sync_at %}
+                                {{ integration.last_sync_at|date:"d/m/Y H:i" }}
+                            {% else %}
+                                —
+                            {% endif %}
+                        </td>
+                        <td class="text-end text-nowrap">
+                            <form
+                                method="post"
+                                action="{% url 'integrations:test' integration.pk %}"
+                                class="d-inline"
+                            >
+                                {% csrf_token %}
+                                <button
+                                    class="btn btn-sm btn-outline-secondary"
+                                    type="submit"
+                                >
+                                    Testar
+                                </button>
+                            </form>
+
+                            <a
+                                href="{% url 'integrations:mercado-pago-reports' integration.pk %}"
+                                class="btn btn-sm btn-outline-primary"
+                            >
+                                Relatórios
+                            </a>
+
+                            <a
+                                href="{% url 'integrations:update' integration.pk %}"
+                                class="btn btn-sm btn-outline-secondary"
+                            >
+                                Editar
+                            </a>
+                        </td>
+                    </tr>
+
+                    {% if integration.last_error %}
+                        <tr class="table-danger">
+                            <td colspan="7" class="small">
+                                <strong>Último erro:</strong>
+                                {{ integration.last_error }}
+                            </td>
+                        </tr>
+                    {% endif %}
+                {% empty %}
+                    <tr>
+                        <td colspan="7" class="text-center py-5 text-secondary">
+                            Nenhuma integração cadastrada.
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+{% endblock %}
