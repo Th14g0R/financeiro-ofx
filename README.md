@@ -1,5 +1,32 @@
-# Financeiro OFX — Etapa 10.8
+# Financeiro OFX — Etapa 10.8.1
 
+
+
+## Etapa 10.8.1 — Correção da auditoria de segurança
+
+A Etapa 10.8 introduziu `security_audit --fail-on-high`. Em instalações
+antigas, o Gerenciador podia ter criado `DJANGO_SECRET_KEY` com o prefixo
+`django-insecure-`. O Django classifica esse formato como inadequado para
+deployment, mesmo quando o restante da chave é aleatório.
+
+A 10.8.1 corrige o problema na origem:
+
+- novas instalações geram `DJANGO_SECRET_KEY` longa e aleatória sem
+  `django-insecure-`;
+- instalações existentes detectam chave ausente, curta ou com o prefixo
+  inseguro e fazem uma rotação automática antes dos checks/testes;
+- a rotação não altera senhas, dados bancários ou
+  `FINANCEIRO_CREDENTIAL_KEY`;
+- sessões autenticadas e links antigos de recuperação de senha são
+  invalidados pela rotação, por segurança;
+- o Gerenciador agora mostra `stdout` e `stderr` juntos quando um comando
+  falha, permitindo identificar exatamente qual achado HIGH bloqueou a
+  instalação;
+- o próprio `security_audit` inclui o código e a mensagem do achado HIGH no
+  `CommandError`.
+
+O aviso `financeiro_security.W003` do modo LAN privado permanece um WARNING e
+não bloqueia a instalação.
 
 
 ## Etapa 10.8 — Multiusuário, autoria e auditoria de segurança

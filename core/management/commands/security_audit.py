@@ -84,8 +84,31 @@ class Command(BaseCommand):
         )
 
         if options["fail_on_high"] and totals["HIGH"]:
+            high_findings = [
+                item
+                for item in findings
+                if item.severity == "HIGH"
+            ]
+
+            summary = "; ".join(
+                (
+                    f"{item.code}"
+                    + (
+                        f" [{item.location}]"
+                        if item.location
+                        else ""
+                    )
+                    + f": {item.message}"
+                )
+                for item in high_findings
+            )
+
             raise CommandError(
-                f"Auditoria encontrou {totals['HIGH']} achado(s) de severidade ALTA."
+                (
+                    f"Auditoria encontrou {totals['HIGH']} "
+                    "achado(s) de severidade ALTA. "
+                    f"{summary}"
+                )
             )
 
     def _settings_findings(self):
@@ -127,9 +150,22 @@ class Command(BaseCommand):
         if "*" in settings.ALLOWED_HOSTS:
             result.append(Finding("HIGH", "CFG003", "ALLOWED_HOSTS contém wildcard '*'."))
 
-        if len(settings.SECRET_KEY) < 50 or settings.SECRET_KEY.startswith("django-insecure-"):
+        if (
+            len(settings.SECRET_KEY) < 50
+            or len(set(settings.SECRET_KEY)) < 5
+            or settings.SECRET_KEY.startswith(
+                "django-insecure-"
+            )
+        ):
             result.append(
-                Finding("HIGH", "CFG004", "DJANGO_SECRET_KEY é curta ou insegura.")
+                Finding(
+                    "HIGH",
+                    "CFG004",
+                    (
+                        "DJANGO_SECRET_KEY é curta, possui baixa diversidade "
+                        "ou usa o prefixo django-insecure-."
+                    ),
+                )
             )
 
         if not settings.SESSION_COOKIE_HTTPONLY:

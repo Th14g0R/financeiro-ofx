@@ -122,3 +122,17 @@ Padrões concretos de token/chave privada: 0
 Essa verificação não substitui `manage.py test`, `manage.py check --deploy` nem o
 comando `security_audit`. Esses controles dependem do Django instalado e serão
 executados no Windows pelo fluxo **Instalar / Atualizar**, antes das migrations.
+
+
+## Chave secreta legada
+
+O instalador corrige automaticamente `DJANGO_SECRET_KEY` quando ela estiver
+ausente, tiver menos de 50 caracteres ou começar com `django-insecure-`.
+
+A correção é feita sem mostrar nem registrar o valor da chave. A troca não
+altera hashes de senha nem a chave usada para criptografar credenciais
+bancárias. Sessões e links de recuperação gerados com a chave antiga deixam de
+ser válidos.
+
+`financeiro_security.W003` indica somente que o modo LAN privado está ativo
+sem HTTPS. Esse aviso continua visível e não é convertido em achado HIGH.

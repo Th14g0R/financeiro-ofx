@@ -176,6 +176,49 @@ PASSWORD_RESET_TIMEOUT_SECONDS=3600
 else {
     Write-Host ".env existente preservado."
 
+    $ExistingSecret = Get-EnvValue -Name "DJANGO_SECRET_KEY"
+    $UniqueSecretChars = 0
+
+    if (-not [string]::IsNullOrWhiteSpace($ExistingSecret)) {
+        $UniqueSecretChars = @(
+            $ExistingSecret.ToCharArray() |
+            Sort-Object -Unique
+        ).Count
+    }
+
+    $SecretNeedsRotation = (
+        [string]::IsNullOrWhiteSpace($ExistingSecret) `
+        -or $ExistingSecret.Length -lt 50 `
+        -or $UniqueSecretChars -lt 5 `
+        -or $ExistingSecret.StartsWith(
+            "django-insecure-",
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    )
+
+    if ($SecretNeedsRotation) {
+        Write-Host (
+            "DJANGO_SECRET_KEY antiga/fraca detectada. "
+            + "Gerando uma nova chave segura..."
+        ) -ForegroundColor Yellow
+
+        $NewSecret = & $Python -c "import secrets; print(secrets.token_urlsafe(64))"
+
+        if ($LASTEXITCODE -ne 0) {
+            throw "Falha ao gerar nova DJANGO_SECRET_KEY."
+        }
+
+        Set-EnvSetting `
+            -Name "DJANGO_SECRET_KEY" `
+            -Value $NewSecret
+
+        Write-Host (
+            "Chave de seguranca atualizada. "
+            + "Sessoes e links de recuperacao antigos foram invalidados; "
+            + "senhas e dados financeiros permanecem inalterados."
+        ) -ForegroundColor Yellow
+    }
+
     $CredentialKey = Get-EnvValue -Name "FINANCEIRO_CREDENTIAL_KEY"
 
     if ([string]::IsNullOrWhiteSpace($CredentialKey)) {

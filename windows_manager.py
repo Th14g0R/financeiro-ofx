@@ -39,6 +39,138 @@ FIREWALL_RULE_NAME = "Financeiro OFX - Rede Local"
 APP_URL = "http://127.0.0.1:8000/"
 
 
+def _secret_key_is_insecure(
+    value: str,
+) -> bool:
+    value = (
+        value
+        or ""
+    ).strip()
+
+    return (
+        len(value) < 50
+        or len(set(value)) < 5
+        or value.startswith(
+            "django-insecure-"
+        )
+    )
+
+
+def _generate_django_secret_key() -> str:
+    return secrets.token_urlsafe(
+        64
+    )
+
+
+def _repair_django_secret_key(
+    env_path: Path,
+) -> bool:
+    """
+    Corrige apenas chaves ausentes/fracas conhecidas.
+
+    A troca invalida sessões e tokens de recuperação antigos,
+    mas NÃO altera senhas, dados financeiros ou a chave usada
+    para criptografar credenciais bancárias.
+    """
+    if not env_path.exists():
+        return False
+
+    original_lines = (
+        env_path.read_text(
+            encoding="utf-8",
+        )
+        .splitlines()
+    )
+
+    current = ""
+    found = False
+
+    for raw_line in original_lines:
+        stripped = raw_line.strip()
+
+        if (
+            not stripped
+            or stripped.startswith("#")
+            or "=" not in raw_line
+        ):
+            continue
+
+        key, value = raw_line.split(
+            "=",
+            1,
+        )
+
+        if (
+            key.strip()
+            == "DJANGO_SECRET_KEY"
+        ):
+            current = value.strip()
+            found = True
+            break
+
+    if (
+        found
+        and not _secret_key_is_insecure(
+            current
+        )
+    ):
+        return False
+
+    replacement = (
+        "DJANGO_SECRET_KEY="
+        + _generate_django_secret_key()
+    )
+
+    output_lines = []
+    replaced = False
+
+    for raw_line in original_lines:
+        if (
+            not replaced
+            and "=" in raw_line
+            and raw_line.split(
+                "=",
+                1,
+            )[0].strip()
+            == "DJANGO_SECRET_KEY"
+        ):
+            output_lines.append(
+                replacement
+            )
+            replaced = True
+        else:
+            output_lines.append(
+                raw_line
+            )
+
+    if not replaced:
+        if (
+            output_lines
+            and output_lines[-1] != ""
+        ):
+            output_lines.append("")
+        output_lines.append(
+            replacement
+        )
+
+    temp_path = env_path.with_name(
+        ".env.tmp"
+    )
+    temp_path.write_text(
+        "\n".join(
+            output_lines
+        ).rstrip()
+        + "\n",
+        encoding="utf-8",
+    )
+    os.replace(
+        temp_path,
+        env_path,
+    )
+
+    return True
+
+
 def ensure_env_file():
     env_path = BASE_DIR / ".env"
 
@@ -48,8 +180,7 @@ def ensure_env_file():
 
     if not env_path.exists():
         secret = (
-            "django-insecure-"
-            + secrets.token_urlsafe(48)
+            _generate_django_secret_key()
         )
 
         env_path.write_text(
@@ -81,9 +212,33 @@ def ensure_env_file():
         )
         return
 
+    secret_repaired = (
+        _repair_django_secret_key(
+            env_path
+        )
+    )
+
     current = env_path.read_text(
         encoding="utf-8"
     )
+
+    if secret_repaired:
+        LOG_DIR.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+        with LOG_FILE.open(
+            "a",
+            encoding="utf-8",
+        ) as log_file:
+            log_file.write(
+                (
+                    f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                    "DJANGO_SECRET_KEY antiga/fraca foi substituída "
+                    "por uma chave aleatória forte. Sessões e links "
+                    "de recuperação antigos foram invalidados.\n"
+                )
+            )
 
     defaults = {
         "DJANGO_SECURE_MODE": "False",
@@ -648,12 +803,35 @@ def run_command(
     )
 
     if check and result.returncode != 0:
+        parts = []
+
+        if result.stdout.strip():
+            parts.append(
+                result.stdout.strip()
+            )
+
+        if result.stderr.strip():
+            stderr_text = (
+                result.stderr.strip()
+            )
+            if (
+                not parts
+                or stderr_text
+                != parts[-1]
+            ):
+                parts.append(
+                    stderr_text
+                )
+
+        if not parts:
+            parts.append(
+                f"Comando falhou: {args}"
+            )
+
         raise RuntimeError(
-            (
-                result.stderr
-                or result.stdout
-                or f"Comando falhou: {args}"
-            ).strip()
+            "\n\n".join(
+                parts
+            )
         )
 
     return result
@@ -1339,6 +1517,11 @@ class ManagerApp(tk.Tk):
 
         if result.stdout.strip():
             self.log(result.stdout)
+
+        if result.stderr.strip():
+            self.log(
+                result.stderr
+            )
 
     def _github_check(
         self,
