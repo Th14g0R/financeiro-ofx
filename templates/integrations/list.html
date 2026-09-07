@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load query_extras %}
 
-{% block title %}Integrações | Financeiro OFX{% endblock %}
+{% block title %}Integrações{% endblock %}
 
 {% block content %}
 <div class="container-fluid px-4 py-4">
@@ -14,12 +14,14 @@
             </p>
         </div>
 
+        {% if can_manage_integrations %}
         <a
             href="{% url 'integrations:create' %}"
             class="btn btn-primary"
         >
             Nova integração
         </a>
+        {% endif %}
     </div>
 
     <div class="alert alert-info">
@@ -134,12 +136,14 @@
                                 Relatórios
                             </a>
 
+                            {% if can_manage_integrations %}
                             <a
                                 href="{% url 'integrations:update' integration.pk %}"
                                 class="btn btn-sm btn-outline-secondary"
                             >
                                 Editar
                             </a>
+                            {% endif %}
                         </td>
                     </tr>
 

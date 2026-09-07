@@ -1650,6 +1650,14 @@ class ManagerApp(tk.Tk):
                     "test",
                 ],
             )
+            self._run_python_step(
+                "Auditando segurança",
+                [
+                    "manage.py",
+                    "security_audit",
+                    "--fail-on-high",
+                ],
+            )
 
             backup_path = backup_database()
 

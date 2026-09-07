@@ -1,0 +1,10 @@
+{% extends "admin/base.html" %}
+{% load i18n %}
+
+{% block title %}Financeiro | {{ title|default:_('Administração') }}{% endblock %}
+
+{% block branding %}
+<div id="site-name">
+    <a href="{% url 'admin:index' %}">Financeiro OFX — Administração</a>
+</div>
+{% endblock %}

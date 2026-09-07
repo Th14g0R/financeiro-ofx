@@ -278,6 +278,14 @@ Invoke-NativeChecked `
     -Description "Execucao dos testes"
 
 
+Write-Host "Executando auditoria automatizada de seguranca..."
+
+Invoke-NativeChecked `
+    -Command $Python `
+    -Arguments @("manage.py", "security_audit", "--fail-on-high") `
+    -Description "Auditoria automatizada de seguranca"
+
+
 $BackupDir = Join-Path $PSScriptRoot "backups"
 
 if (Test-Path "db.sqlite3") {

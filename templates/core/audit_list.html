@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Auditoria{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+    <div class="mb-4">
+        <h1 class="h3 mb-1">Auditoria</h1>
+        <p class="text-secondary mb-0">
+            Trilha somente leitura na interface das operações que alteram dados. Senhas, tokens, segredos e conteúdo de arquivos não são gravados.
+        </p>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-4">
+        <div class="card-body">
+            <form method="get" class="row g-3 align-items-end">
+                <div class="col-12 col-xl-4">
+                    <label class="form-label" for="q">Operação / caminho</label>
+                    <input id="q" name="q" class="form-control" value="{{ query }}" placeholder="Ex.: finance:transaction-create">
+                </div>
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label class="form-label" for="user">Usuário</label>
+                    <select id="user" name="user" class="form-select">
+                        <option value="">Todos</option>
+                        {% for item in users %}<option value="{{ item.pk }}" {% if selected_user == item.pk|stringformat:'s' %}selected{% endif %}>{{ item.username }}</option>{% endfor %}
+                    </select>
+                </div>
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label class="form-label" for="result">Resultado</label>
+                    <select id="result" name="result" class="form-select">
+                        <option value="">Todos</option>
+                        <option value="success" {% if result_filter == 'success' %}selected{% endif %}>Sucesso</option>
+                        <option value="failure" {% if result_filter == 'failure' %}selected{% endif %}>Falha</option>
+                    </select>
+                </div>
+                <div class="col-6 col-xl-2">
+                    <label class="form-label" for="date_from">De</label>
+                    <input id="date_from" name="date_from" type="date" class="form-control" value="{{ date_from }}">
+                </div>
+                <div class="col-6 col-xl-2">
+                    <label class="form-label" for="date_to">Até</label>
+                    <input id="date_to" name="date_to" type="date" class="form-control" value="{{ date_to }}">
+                </div>
+                <div class="col-12 d-flex justify-content-end gap-2">
+                    <a href="{% url 'audit_list' %}" class="btn btn-outline-secondary">Limpar</a>
+                    <button type="submit" class="btn btn-primary">Filtrar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Data/hora</th>
+                        <th>Usuário</th>
+                        <th>Operação</th>
+                        <th>Método</th>
+                        <th>Resultado</th>
+                        <th>Caminho</th>
+                        <th>Req.</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for event in events %}
+                    <tr>
+                        <td class="text-nowrap">{{ event.created_at|date:"d/m/Y H:i:s" }}</td>
+                        <td class="fw-semibold">{{ event.actor.username|default:"—" }}</td>
+                        <td><code>{{ event.action }}</code></td>
+                        <td>{{ event.method }}</td>
+                        <td>
+                            {% if event.success %}<span class="badge text-bg-success">Sucesso</span>{% else %}<span class="badge text-bg-danger">Falha</span>{% endif %}
+                            <span class="small text-secondary">HTTP {{ event.status_code }}</span>
+                        </td>
+                        <td class="small">{{ event.path }}</td>
+                        <td><code class="small">{{ event.request_id|slice:":8" }}</code></td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="7" class="text-center text-secondary py-5">Nenhum evento encontrado.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if page_obj.paginator.num_pages > 1 %}
+        <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+            <span class="small text-secondary">Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</span>
+            <div class="d-flex gap-2">
+                {% if page_obj.has_previous %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page_obj.previous_page_number }}">Anterior</a>{% endif %}
+                {% if page_obj.has_next %}<a class="btn btn-sm btn-outline-secondary" href="?page={{ page_obj.next_page_number }}">Próxima</a>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

@@ -43,6 +43,7 @@ ESSENTIAL_TOP_LEVEL_FILES = (
     "MERCADO_PAGO_SETUP.md",
     "README.md",
     "SECURITY.md",
+    "SECURITY_AUDIT.md",
     "github_sync.py",
     "manage.py",
     "requirements.txt",

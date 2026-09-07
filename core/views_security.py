@@ -113,6 +113,13 @@ class SecureLoginView(
                     self.request,
                     username,
                 )
+                record_security_event(
+                    self.request,
+                    event_type=(
+                        SecurityEvent.EventType.LOGIN_FAILURE
+                    ),
+                    success=False,
+                )
 
         return super().form_invalid(
             form
@@ -147,6 +154,39 @@ class SecureLoginView(
         )
 
         return response
+
+
+class SecurePasswordChangeView(
+    auth_views.PasswordChangeView
+):
+    template_name = (
+        "registration/password_change_form.html"
+    )
+    success_url = reverse_lazy(
+        "password_change_done"
+    )
+
+    def dispatch(
+        self,
+        request,
+        *args,
+        **kwargs,
+    ):
+        if not sensitive_operation_allowed(request):
+            messages.error(
+                request,
+                (
+                    "Por segurança, a alteração de senha só pode "
+                    "ser realizada neste computador ou através de HTTPS."
+                ),
+            )
+            return redirect("account_profile")
+
+        return super().dispatch(
+            request,
+            *args,
+            **kwargs,
+        )
 
 
 class SecurePasswordResetView(
@@ -257,6 +297,19 @@ class SecurePasswordResetConfirmView(
 
 @login_required
 def account_profile(request):
+    if (
+        request.method == "POST"
+        and not sensitive_operation_allowed(request)
+    ):
+        messages.error(
+            request,
+            (
+                "Por segurança, a alteração do e-mail de recuperação "
+                "só pode ser realizada neste computador ou através de HTTPS."
+            ),
+        )
+        return redirect("account_profile")
+
     if request.method == "POST":
         form = AccountProfileForm(
             request.POST,

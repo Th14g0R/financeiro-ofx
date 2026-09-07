@@ -5,12 +5,43 @@ from django.urls import path
 
 from core.views import home
 from core.views_security import SecureLoginView
+from core.views_security import SecurePasswordChangeView
 from core.views_security import SecurePasswordResetConfirmView
 from core.views_security import SecurePasswordResetView
 from core.views_security import account_profile
+from core.views_users import audit_list
+from core.views_users import user_create
+from core.views_users import user_list
+from core.views_users import user_password_reset
+from core.views_users import user_update
 
 
 urlpatterns = [
+    path(
+        "usuarios/",
+        user_list,
+        name="system_user_list",
+    ),
+    path(
+        "usuarios/novo/",
+        user_create,
+        name="system_user_create",
+    ),
+    path(
+        "usuarios/<int:pk>/editar/",
+        user_update,
+        name="system_user_update",
+    ),
+    path(
+        "usuarios/<int:pk>/senha/",
+        user_password_reset,
+        name="system_user_password_reset",
+    ),
+    path(
+        "auditoria/",
+        audit_list,
+        name="audit_list",
+    ),
     path(
         "",
         home,
@@ -33,14 +64,7 @@ urlpatterns = [
     ),
     path(
         "senha/alterar/",
-        auth_views.PasswordChangeView.as_view(
-            template_name=(
-                "registration/password_change_form.html"
-            ),
-            success_url=(
-                "/senha/alterar/concluido/"
-            ),
-        ),
+        SecurePasswordChangeView.as_view(),
         name="password_change",
     ),
     path(

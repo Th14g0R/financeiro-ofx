@@ -1,5 +1,79 @@
-# Financeiro OFX — Etapa 10.7.1
+# Financeiro OFX — Etapa 10.8
 
+
+
+## Etapa 10.8 — Multiusuário, autoria e auditoria de segurança
+
+### Títulos das abas
+
+Todas as páginas usam o padrão:
+
+```text
+Financeiro | Dashboard
+Financeiro | Extrato
+Financeiro | Pessoas
+Financeiro | Importações
+Financeiro | Contas
+Financeiro | Usuários
+Financeiro | Auditoria
+```
+
+O prefixo `Financeiro |` fica definido no `base.html`, evitando que novas
+páginas invertam o padrão por engano.
+
+### Segundo usuário
+
+Administradores possuem a nova área `Usuários` para cadastrar cônjuge ou
+funcionário de confiança com conta individual e e-mail de recuperação.
+
+Perfis:
+
+```text
+Administrador
+Operador de confiança
+```
+
+O operador pode executar as operações financeiras normais. Somente o perfil
+Administrador pode gerenciar usuários e consultar a trilha administrativa de
+auditoria.
+
+Criar, editar ou redefinir a senha de outro usuário exige a senha atual do
+administrador. Desativar uma conta invalida suas sessões ativas. O sistema não
+permite remover/desativar o último administrador ativo.
+
+Por envolver senha administrativa e mudança de privilégios, cadastro, alteração de
+perfil e redefinição administrativa de senha ficam restritos a `localhost` ou a uma
+conexão HTTPS reconhecida pelo Django. Em LAN por HTTP essas operações são bloqueadas.
+A mesma proteção cobre a área Django `/admin/`, alteração da própria senha e
+alteração do e-mail de recuperação.
+
+Na migration, superusuários/staff existentes permanecem administradores. Se a
+base antiga não possuir nenhum deles, o primeiro usuário ativo é preservado como
+administrador e os demais recebem o perfil Operador, seguindo privilégio mínimo.
+
+### Auditoria de operações
+
+Toda requisição autenticada que altera estado (`POST`, `PUT`, `PATCH`,
+`DELETE`) gera um `AuditEvent`, com autoria, rota, request-id e resultado.
+Respostas 401/403 de usuários autenticados também são registradas. Falhas e
+bloqueios de login geram eventos de segurança separados. Senhas, tokens,
+secrets e conteúdo de arquivos não entram no log.
+
+### Auditoria automatizada de segurança
+
+`Instalar / Atualizar` passa a executar:
+
+```text
+manage.py test
+manage.py security_audit --fail-on-high
+```
+
+antes do backup e das migrations. Veja `SECURITY_AUDIT.md` para escopo,
+achados e limitações.
+
+Não há tentativa de prometer "invulnerabilidade": a ferramenta reduz e testa
+classes conhecidas de falhas, mas um pentest externo autorizado continua sendo
+a validação adequada quando o sistema for exposto além de uma LAN privada.
 
 ## Etapa 10.7.1 — Correção do teste de bloqueio de login
 

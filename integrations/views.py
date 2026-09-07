@@ -10,6 +10,8 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 
+from core.access import system_admin_required
+
 from core.models import SecurityEvent
 from core.security import record_security_event
 from core.security import sensitive_operation_allowed
@@ -31,17 +33,13 @@ from .models import BankIntegration
 
 
 def _integration_queryset(request):
-    queryset = BankIntegration.objects.select_related(
+    # Integrações pertencem ao Financeiro OFX, não ao usuário que as criou.
+    # Operadores de confiança podem consultar/usar relatórios; somente
+    # administradores podem criar ou alterar as credenciais.
+    return BankIntegration.objects.select_related(
         "account",
         "account__bank",
         "created_by",
-    )
-
-    if request.user.is_superuser:
-        return queryset
-
-    return queryset.filter(
-        created_by=request.user
     )
 
 
@@ -94,7 +92,7 @@ def integration_list(request):
     )
 
 
-@login_required
+@system_admin_required
 def integration_create(request):
     if not sensitive_operation_allowed(
         request
@@ -166,7 +164,7 @@ def integration_create(request):
     )
 
 
-@login_required
+@system_admin_required
 def integration_update(request, pk):
     if not sensitive_operation_allowed(
         request

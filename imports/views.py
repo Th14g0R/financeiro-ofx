@@ -37,12 +37,10 @@ from services.importing.commit import refresh_batch_status
 
 
 def _batch_queryset_for_user(request):
-    queryset = ImportBatch.objects.all()
-
-    if request.user.is_superuser:
-        return queryset
-
-    return queryset.filter(created_by=request.user)
+    # Os lotes pertencem ao Financeiro OFX como um todo. O campo created_by
+    # preserva a autoria, enquanto os demais usuários autorizados podem
+    # conferir/reprocessar o histórico compartilhado.
+    return ImportBatch.objects.all()
 
 
 def _get_batch(request, pk):

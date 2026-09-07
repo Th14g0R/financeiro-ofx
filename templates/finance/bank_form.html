@@ -1,8 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}
-    {% if object %}Editar banco{% else %}Novo banco{% endif %} | Financeiro OFX
-{% endblock %}
+{% block title %}{% if object %}Editar banco{% else %}Novo banco{% endif %}{% endblock %}
 
 {% block content %}
 <div class="container py-4">

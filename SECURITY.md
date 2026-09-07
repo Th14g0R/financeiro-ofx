@@ -205,3 +205,36 @@ volta para `127.0.0.1` mesmo se a remoção da regra do Firewall falhar.
   apenas em localhost ou HTTPS;
 - credenciais SMTP ficam somente no `.env` local e não devem ser publicadas no
   GitHub.
+
+## Multiusuário e autoria
+
+Cada pessoa deve utilizar sua própria conta. Compartilhar usuário/senha elimina
+a capacidade de atribuir uma operação corretamente.
+
+A Etapa 10.8 registra alterações autenticadas em `AuditEvent`. A trilha é
+somente leitura na interface administrativa e não armazena valores de senha,
+token ou segredo. Falhas de login e bloqueios ficam em `SecurityEvent`, e
+decisões de acesso negadas para usuários autenticados também são auditadas.
+
+Desativar um usuário invalida suas sessões ativas. Redefinição administrativa
+de senha também encerra sessões antigas do usuário afetado.
+
+Gerenciamento de usuários (criar, alterar perfil/estado e redefinir senha) exige
+`localhost` ou HTTPS, além da reautenticação pela senha do administrador. O modo LAN
+por HTTP permanece adequado apenas para operações não sensíveis de consulta/operação.
+A área `/admin/`, alteração da própria senha e alteração do e-mail de recuperação
+também são bloqueadas em HTTP remoto/LAN; use o computador local ou HTTPS para essas
+superfícies sensíveis.
+
+## Auditoria automatizada
+
+Antes de migrations, o instalador executa:
+
+```text
+python manage.py security_audit --fail-on-high
+```
+
+O comando agrega os checks de deploy do Django e verificações locais de
+configuração, CSRF, escaping, padrões de injeção, segredos e recursos externos.
+Consulte `SECURITY_AUDIT.md`.
+

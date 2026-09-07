@@ -9,7 +9,7 @@
         content="width=device-width, initial-scale=1"
     >
 
-    <title>{% block title %}Financeiro OFX{% endblock %}</title>
+    <title>Financeiro | {% block title %}Dashboard{% endblock %}</title>
 
     <link
         href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
@@ -146,6 +146,26 @@
                         Contas
                     </a>
                 </li>
+
+                {% if can_manage_system_users %}
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'system_user_list' %}"
+                    >
+                        Usuários
+                    </a>
+                </li>
+
+                <li class="nav-item">
+                    <a
+                        class="nav-link"
+                        href="{% url 'audit_list' %}"
+                    >
+                        Auditoria
+                    </a>
+                </li>
+                {% endif %}
 
             </ul>
 
