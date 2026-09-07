@@ -160,6 +160,17 @@ LOGIN_THROTTLE_LOCK_SECONDS=900
 DJANGO_SESSION_AGE_SECONDS=1800
 DJANGO_HSTS_SECONDS=3600
 DJANGO_HSTS_INCLUDE_SUBDOMAINS=False
+PASSWORD_RECOVERY_EMAIL_ENABLED=False
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=
+EMAIL_PORT=587
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
+EMAIL_TIMEOUT_SECONDS=15
+DEFAULT_FROM_EMAIL=
+PASSWORD_RESET_TIMEOUT_SECONDS=3600
 "@ | Set-Content ".env" -Encoding utf8
 }
 else {
@@ -204,6 +215,17 @@ else {
     Ensure-EnvSetting -Name "DJANGO_SESSION_AGE_SECONDS" -Value "1800"
     Ensure-EnvSetting -Name "DJANGO_HSTS_SECONDS" -Value "3600"
     Ensure-EnvSetting -Name "DJANGO_HSTS_INCLUDE_SUBDOMAINS" -Value "False"
+    Ensure-EnvSetting -Name "PASSWORD_RECOVERY_EMAIL_ENABLED" -Value "False"
+    Ensure-EnvSetting -Name "EMAIL_BACKEND" -Value "django.core.mail.backends.smtp.EmailBackend"
+    Ensure-EnvSetting -Name "EMAIL_HOST" -Value ""
+    Ensure-EnvSetting -Name "EMAIL_PORT" -Value "587"
+    Ensure-EnvSetting -Name "EMAIL_HOST_USER" -Value ""
+    Ensure-EnvSetting -Name "EMAIL_HOST_PASSWORD" -Value ""
+    Ensure-EnvSetting -Name "EMAIL_USE_TLS" -Value "True"
+    Ensure-EnvSetting -Name "EMAIL_USE_SSL" -Value "False"
+    Ensure-EnvSetting -Name "EMAIL_TIMEOUT_SECONDS" -Value "15"
+    Ensure-EnvSetting -Name "DEFAULT_FROM_EMAIL" -Value ""
+    Ensure-EnvSetting -Name "PASSWORD_RESET_TIMEOUT_SECONDS" -Value "3600"
 }
 
 

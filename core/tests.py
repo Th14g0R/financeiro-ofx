@@ -434,3 +434,192 @@ class StaticFilesTestConfigurationTests(SimpleTestCase):
                 "StaticFilesStorage"
             ),
         )
+
+
+class AccountRecoveryTests(TestCase):
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+
+        self.user = get_user_model().objects.create_user(
+            username="thiago",
+            email="thiago@example.com",
+            password="Correct-password-123!",
+        )
+
+    def test_login_accepts_username_with_different_case(self):
+        response = self.client.post(
+            reverse("login"),
+            {
+                "username": "Thiago",
+                "password": "Correct-password-123!",
+            },
+            REMOTE_ADDR="127.0.0.1",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            302,
+        )
+        self.assertEqual(
+            str(response.url),
+            reverse("home"),
+        )
+
+    def test_blocked_login_shows_wait_message(self):
+        from django.test import override_settings
+
+        with override_settings(
+            LOGIN_THROTTLE_USERNAME_MAX=1,
+            LOGIN_THROTTLE_IP_MAX=20,
+            LOGIN_THROTTLE_WINDOW_SECONDS=900,
+            LOGIN_THROTTLE_LOCK_SECONDS=900,
+        ):
+            self.client.post(
+                reverse("login"),
+                {
+                    "username": "thiago",
+                    "password": "wrong-password",
+                },
+                REMOTE_ADDR="127.0.0.77",
+            )
+            blocked = self.client.post(
+                reverse("login"),
+                {
+                    "username": "thiago",
+                    "password": "Correct-password-123!",
+                },
+                REMOTE_ADDR="127.0.0.77",
+            )
+
+        self.assertEqual(
+            blocked.status_code,
+            429,
+        )
+        self.assertContains(
+            blocked,
+            "Muitas tentativas de acesso",
+            status_code=429,
+        )
+
+    def test_profile_requires_current_password_to_change_recovery_email(self):
+        self.client.force_login(
+            self.user
+        )
+
+        response = self.client.post(
+            reverse("account_profile"),
+            {
+                "email": "novo@example.com",
+                "current_password": "wrong-password",
+            },
+        )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(
+            self.user.email,
+            "thiago@example.com",
+        )
+        self.assertContains(
+            response,
+            "Senha atual inválida",
+        )
+
+    def test_profile_updates_recovery_email_with_current_password(self):
+        self.client.force_login(
+            self.user
+        )
+
+        response = self.client.post(
+            reverse("account_profile"),
+            {
+                "email": "novo@example.com",
+                "current_password": "Correct-password-123!",
+            },
+        )
+
+        self.assertEqual(
+            response.status_code,
+            302,
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(
+            self.user.email,
+            "novo@example.com",
+        )
+
+    def test_password_reset_sends_email_when_enabled(self):
+        from django.core import mail
+        from django.test import override_settings
+
+        with override_settings(
+            PASSWORD_RECOVERY_EMAIL_ENABLED=True,
+            EMAIL_BACKEND=(
+                "django.core.mail.backends.locmem.EmailBackend"
+            ),
+            DEFAULT_FROM_EMAIL="financeiro@example.com",
+        ):
+            response = self.client.post(
+                reverse("password_reset"),
+                {
+                    "email": "thiago@example.com",
+                },
+                REMOTE_ADDR="127.0.0.1",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            302,
+        )
+        self.assertEqual(
+            len(mail.outbox),
+            1,
+        )
+        self.assertIn(
+            "/senha/redefinir/",
+            mail.outbox[0].body,
+        )
+
+    def test_local_manager_recovery_verifies_and_resets_password(self):
+        from core.account_recovery import (
+            update_local_account_recovery,
+        )
+        from core.account_recovery import (
+            verify_local_password,
+        )
+        from core.models import LoginThrottleBucket
+        from django.utils import timezone
+
+        LoginThrottleBucket.objects.create(
+            scope=LoginThrottleBucket.Scope.USERNAME,
+            key_hash="0" * 64,
+            failures=5,
+            window_started_at=timezone.now(),
+            locked_until=timezone.now(),
+        )
+
+        self.assertTrue(
+            verify_local_password(
+                username="Thiago",
+                password="Correct-password-123!",
+            )
+        )
+
+        update_local_account_recovery(
+            username="THIAGO",
+            email="recuperacao@example.com",
+            new_password="New-correct-password-456!",
+        )
+
+        self.assertTrue(
+            verify_local_password(
+                username="thiago",
+                password="New-correct-password-456!",
+            )
+        )
+        self.assertFalse(
+            LoginThrottleBucket.objects.exists()
+        )

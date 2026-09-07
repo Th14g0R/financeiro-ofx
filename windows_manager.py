@@ -5,13 +5,16 @@ import os
 import secrets
 import shutil
 import socket
+import smtplib
 from pathlib import Path
+from email.message import EmailMessage
 import subprocess
 import sys
 import time
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import scrolledtext
+from tkinter import ttk
 import urllib.request
 import webbrowser
 
@@ -31,7 +34,6 @@ LOG_DIR = BASE_DIR / "logs"
 LOG_FILE = LOG_DIR / "manager.log"
 BACKUP_DIR = BASE_DIR / "backups"
 TASK_NAME = "FinanceiroOFX"
-TASK_LAUNCHER = BASE_DIR / "windows" / "start_hidden.vbs"
 FIREWALL_SCRIPT = BASE_DIR / "windows" / "network_access.ps1"
 FIREWALL_RULE_NAME = "Financeiro OFX - Rede Local"
 APP_URL = "http://127.0.0.1:8000/"
@@ -63,6 +65,17 @@ def ensure_env_file():
                 "FINANCEIRO_ALLOW_NETWORK=False\n"
                 "FINANCEIRO_LAN_MODE=False\n"
                 f"FINANCEIRO_CREDENTIAL_KEY={credential_key}\n"
+                "PASSWORD_RECOVERY_EMAIL_ENABLED=False\n"
+                "EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend\n"
+                "EMAIL_HOST=\n"
+                "EMAIL_PORT=587\n"
+                "EMAIL_HOST_USER=\n"
+                "EMAIL_HOST_PASSWORD=\n"
+                "EMAIL_USE_TLS=True\n"
+                "EMAIL_USE_SSL=False\n"
+                "EMAIL_TIMEOUT_SECONDS=15\n"
+                "DEFAULT_FROM_EMAIL=\n"
+                "PASSWORD_RESET_TIMEOUT_SECONDS=3600\n"
             ),
             encoding="utf-8",
         )
@@ -79,6 +92,19 @@ def ensure_env_file():
         "FINANCEIRO_ALLOW_NETWORK": "False",
         "FINANCEIRO_LAN_MODE": "False",
         "FINANCEIRO_CREDENTIAL_KEY": credential_key,
+        "PASSWORD_RECOVERY_EMAIL_ENABLED": "False",
+        "EMAIL_BACKEND": (
+            "django.core.mail.backends.smtp.EmailBackend"
+        ),
+        "EMAIL_HOST": "",
+        "EMAIL_PORT": "587",
+        "EMAIL_HOST_USER": "",
+        "EMAIL_HOST_PASSWORD": "",
+        "EMAIL_USE_TLS": "True",
+        "EMAIL_USE_SSL": "False",
+        "EMAIL_TIMEOUT_SECONDS": "15",
+        "DEFAULT_FROM_EMAIL": "",
+        "PASSWORD_RESET_TIMEOUT_SECONDS": "3600",
     }
 
     existing_keys = {
@@ -205,6 +231,24 @@ def update_env_values(
         temp_path,
         env_path,
     )
+
+
+def env_flag_from_values(
+    values: dict[str, str],
+    name: str,
+    default: bool = False,
+) -> bool:
+    value = values.get(
+        name,
+        str(default),
+    )
+
+    return value.strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def env_flag(
@@ -735,8 +779,10 @@ def start_server():
 
 
 def build_task_command() -> str:
+    # Usa pythonw diretamente: não abre janela e não depende de VBS.
+    # O próprio windows_manager --start valida se o servidor já está ativo.
     return (
-        f'wscript.exe "{TASK_LAUNCHER}"'
+        f'"{PYTHONW}" "{Path(__file__).resolve()}" --start'
     )
 
 
@@ -753,12 +799,52 @@ def task_exists() -> bool:
     return result.returncode == 0
 
 
+def task_is_configured_for_autostart() -> bool:
+    if not task_exists():
+        return False
+
+    result = run_command(
+        [
+            "schtasks",
+            "/Query",
+            "/TN",
+            TASK_NAME,
+            "/V",
+            "/FO",
+            "LIST",
+        ],
+        check=False,
+    )
+
+    if result.returncode != 0:
+        return False
+
+    output = result.stdout.lower()
+
+    # A saída do schtasks é localizada, por isso evitamos depender do
+    # rótulo do campo. O comando e o gatilho aparecem no conteúdo.
+    return (
+        str(PYTHONW).lower() in output
+        and "--start" in output
+    )
+
+
 def install_startup_task():
-    if not TASK_LAUNCHER.exists():
+    if not PYTHONW.exists():
         raise RuntimeError(
-            f"Launcher não encontrado: {TASK_LAUNCHER}"
+            "pythonw.exe não encontrado. Execute primeiro Instalar/Atualizar."
         )
 
+    manager_path = Path(__file__).resolve()
+
+    if not manager_path.exists():
+        raise RuntimeError(
+            f"Gerenciador não encontrado: {manager_path}"
+        )
+
+    # ONLOGON é deliberado: o servidor roda no contexto do próprio usuário,
+    # sem elevar o processo web para SYSTEM. Depois do logon, nenhuma ação
+    # manual no Gerenciador é necessária.
     run_command(
         [
             "schtasks",
@@ -769,10 +855,45 @@ def install_startup_task():
             build_task_command(),
             "/SC",
             "ONLOGON",
+            "/DELAY",
+            "0000:10",
             "/RL",
             "LIMITED",
             "/F",
         ]
+    )
+
+    if not task_exists():
+        raise RuntimeError(
+            "A tarefa de inicialização automática não pôde ser confirmada."
+        )
+
+
+def run_startup_task_now():
+    if not task_exists():
+        raise RuntimeError(
+            "Inicialização automática ainda não está instalada."
+        )
+
+    run_command(
+        [
+            "schtasks",
+            "/Run",
+            "/TN",
+            TASK_NAME,
+        ]
+    )
+
+    for _ in range(50):
+        if server_running():
+            return
+        time.sleep(0.2)
+
+    raise RuntimeError(
+        (
+            "A inicialização automática foi acionada, mas o servidor "
+            f"não respondeu em {APP_URL}. Consulte {LOG_FILE}."
+        )
     )
 
 
@@ -789,6 +910,196 @@ def remove_startup_task():
     )
 
 
+_DJANGO_READY = False
+
+
+def ensure_django_ready():
+    global _DJANGO_READY
+
+    if _DJANGO_READY:
+        return
+
+    ensure_env_file()
+    os.environ.setdefault(
+        "DJANGO_SETTINGS_MODULE",
+        "config.settings",
+    )
+
+    import django
+
+    django.setup()
+    _DJANGO_READY = True
+
+
+def local_accounts():
+    ensure_django_ready()
+
+    from core.account_recovery import (
+        list_local_accounts,
+    )
+
+    return list_local_accounts()
+
+
+def verify_account_password(
+    *,
+    username: str,
+    password: str,
+) -> bool:
+    ensure_django_ready()
+
+    from core.account_recovery import (
+        verify_local_password,
+    )
+
+    return verify_local_password(
+        username=username,
+        password=password,
+    )
+
+
+def save_account_recovery(
+    *,
+    username: str,
+    email: str,
+    new_password: str | None,
+):
+    ensure_django_ready()
+
+    from core.account_recovery import (
+        update_local_account_recovery,
+    )
+
+    return update_local_account_recovery(
+        username=username,
+        email=email,
+        new_password=new_password,
+    )
+
+
+def send_smtp_test(
+    *,
+    recipient: str,
+    config: dict[str, str],
+):
+    host = config.get(
+        "EMAIL_HOST",
+        "",
+    ).strip()
+    port = int(
+        config.get(
+            "EMAIL_PORT",
+            "587",
+        )
+        or "587"
+    )
+    username = config.get(
+        "EMAIL_HOST_USER",
+        "",
+    ).strip()
+    password = config.get(
+        "EMAIL_HOST_PASSWORD",
+        "",
+    )
+    from_email = (
+        config.get(
+            "DEFAULT_FROM_EMAIL",
+            "",
+        ).strip()
+        or username
+    )
+    use_tls = (
+        config.get(
+            "EMAIL_USE_TLS",
+            "True",
+        ).strip().lower()
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
+    use_ssl = (
+        config.get(
+            "EMAIL_USE_SSL",
+            "False",
+        ).strip().lower()
+        in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+    )
+    timeout = int(
+        config.get(
+            "EMAIL_TIMEOUT_SECONDS",
+            "15",
+        )
+        or "15"
+    )
+
+    if not host:
+        raise RuntimeError(
+            "Informe o servidor SMTP."
+        )
+
+    if not recipient:
+        raise RuntimeError(
+            (
+                "Cadastre primeiro um e-mail de recuperação "
+                "para o usuário."
+            )
+        )
+
+    if not from_email:
+        raise RuntimeError(
+            (
+                "Informe DEFAULT_FROM_EMAIL ou o usuário SMTP."
+            )
+        )
+
+    message = EmailMessage()
+    message["Subject"] = (
+        "Financeiro OFX - teste de recuperação"
+    )
+    message["From"] = from_email
+    message["To"] = recipient
+    message.set_content(
+        (
+            "Este é um teste da configuração de e-mail "
+            "do Financeiro OFX.\n\n"
+            "Se você recebeu esta mensagem, o SMTP está "
+            "funcionando para a recuperação de senha."
+        )
+    )
+
+    smtp_class = (
+        smtplib.SMTP_SSL
+        if use_ssl
+        else smtplib.SMTP
+    )
+
+    with smtp_class(
+        host,
+        port,
+        timeout=timeout,
+    ) as smtp:
+        if use_tls and not use_ssl:
+            smtp.starttls()
+
+        if username:
+            smtp.login(
+                username,
+                password,
+            )
+
+        smtp.send_message(
+            message
+        )
+
+
 class ManagerApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -796,8 +1107,8 @@ class ManagerApp(tk.Tk):
         self.title(
             "Financeiro OFX - Gerenciador"
         )
-        self.geometry("760x660")
-        self.minsize(720, 620)
+        self.geometry("760x710")
+        self.minsize(720, 670)
 
         self.status_var = tk.StringVar()
 
@@ -879,6 +1190,10 @@ class ManagerApp(tk.Tk):
                 self.open_action,
             ),
             (
+                "Usuários / recuperação",
+                self.account_recovery_action,
+            ),
+            (
                 "Abrir para rede local",
                 self.open_lan_action,
             ),
@@ -887,11 +1202,11 @@ class ManagerApp(tk.Tk):
                 self.close_lan_action,
             ),
             (
-                "Ativar início automático",
+                "Ativar início automático no Windows",
                 self.install_task_action,
             ),
             (
-                "Remover início automático",
+                "Desativar início automático",
                 self.remove_task_action,
             ),
         ]
@@ -964,6 +1279,11 @@ class ManagerApp(tk.Tk):
     def refresh_status(self):
         running = server_running()
         automatic = task_exists()
+        automatic_configured = (
+            task_is_configured_for_autostart()
+            if automatic
+            else False
+        )
 
         network_open = (
             local_network_enabled()
@@ -979,7 +1299,15 @@ class ManagerApp(tk.Tk):
                 "Servidor: "
                 + ("ATIVO" if running else "PARADO")
                 + "\nInicialização automática: "
-                + ("ATIVA" if automatic else "DESATIVADA")
+                + (
+                    "ATIVA (ao entrar no Windows)"
+                    if automatic_configured
+                    else (
+                        "PRECISA SER RECONFIGURADA"
+                        if automatic
+                        else "DESATIVADA"
+                    )
+                )
                 + "\nRede local: "
                 + (
                     "ABERTA"
@@ -1361,18 +1689,28 @@ class ManagerApp(tk.Tk):
                 ],
             )
 
+            self.log(
+                "Configurando inicialização automática do servidor..."
+            )
             install_startup_task()
 
             stop_server()
-            start_server()
+            run_startup_task_now()
 
             self.log(
-                "Atualização concluída e servidor iniciado."
+                (
+                    "Atualização concluída. Servidor iniciado e "
+                    "inicialização automática validada."
+                )
             )
             messagebox.showinfo(
                 "Financeiro OFX",
                 (
                     "Instalação/atualização concluída.\n\n"
+                    "A inicialização automática do Financeiro OFX foi "
+                    "instalada e testada. Depois de reiniciar o computador, "
+                    "o servidor subirá sozinho assim que você entrar no Windows; "
+                    "não será necessário abrir o Gerenciador.\n\n"
                     "Se o Gerenciador também foi atualizado pelo GitHub, "
                     "feche esta janela e abra novamente para carregar "
                     "a versão nova da interface."
@@ -1386,6 +1724,811 @@ class ManagerApp(tk.Tk):
             )
         finally:
             self.refresh_status()
+
+    def account_recovery_action(self):
+        try:
+            accounts = list(
+                local_accounts()
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Usuários / recuperação",
+                (
+                    "Não foi possível abrir os usuários locais.\n\n"
+                    f"{exc}\n\n"
+                    "Se houver migration pendente, execute primeiro "
+                    "Instalar / Atualizar."
+                ),
+            )
+            return
+
+        if not accounts:
+            messagebox.showwarning(
+                "Usuários / recuperação",
+                (
+                    "Nenhum usuário foi encontrado no banco local.\n\n"
+                    "Crie o primeiro administrador com o processo "
+                    "de instalação/superusuário."
+                ),
+            )
+            return
+
+        window = tk.Toplevel(self)
+        window.title(
+            "Financeiro OFX - Usuários / recuperação"
+        )
+        window.geometry(
+            "640x600"
+        )
+        window.minsize(
+            600,
+            560,
+        )
+        window.transient(self)
+        window.grab_set()
+
+        frame = tk.Frame(
+            window,
+            padx=18,
+            pady=18,
+        )
+        frame.pack(
+            fill="both",
+            expand=True,
+        )
+
+        tk.Label(
+            frame,
+            text="Recuperação local de acesso",
+            font=(
+                "Segoe UI",
+                15,
+                "bold",
+            ),
+        ).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 4),
+        )
+
+        tk.Label(
+            frame,
+            text=(
+                "Esta tela funciona somente no computador que possui "
+                "o banco local. Ela permite verificar a senha, "
+                "cadastrar o e-mail e redefinir o acesso."
+            ),
+            justify="left",
+            wraplength=580,
+        ).grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 14),
+        )
+
+        username_var = tk.StringVar()
+        email_var = tk.StringVar()
+        verify_var = tk.StringVar()
+        new_password_var = tk.StringVar()
+        confirm_var = tk.StringVar()
+        status_var = tk.StringVar()
+
+        account_by_username = {
+            account.username: account
+            for account in accounts
+        }
+
+        tk.Label(
+            frame,
+            text="Usuário",
+        ).grid(
+            row=2,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
+
+        combo = ttk.Combobox(
+            frame,
+            textvariable=username_var,
+            values=[
+                account.username
+                for account in accounts
+            ],
+            state="readonly",
+        )
+        combo.grid(
+            row=2,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+
+        tk.Label(
+            frame,
+            text="E-mail de recuperação",
+        ).grid(
+            row=3,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
+        tk.Entry(
+            frame,
+            textvariable=email_var,
+        ).grid(
+            row=3,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+
+        tk.Label(
+            frame,
+            text="Senha para verificar",
+        ).grid(
+            row=4,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
+        tk.Entry(
+            frame,
+            textvariable=verify_var,
+            show="•",
+        ).grid(
+            row=4,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+
+        tk.Label(
+            frame,
+            text="Nova senha",
+        ).grid(
+            row=5,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
+        tk.Entry(
+            frame,
+            textvariable=new_password_var,
+            show="•",
+        ).grid(
+            row=5,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+
+        tk.Label(
+            frame,
+            text="Confirmar nova senha",
+        ).grid(
+            row=6,
+            column=0,
+            sticky="w",
+            pady=4,
+        )
+        tk.Entry(
+            frame,
+            textvariable=confirm_var,
+            show="•",
+        ).grid(
+            row=6,
+            column=1,
+            sticky="ew",
+            pady=4,
+        )
+
+        tk.Label(
+            frame,
+            textvariable=status_var,
+            justify="left",
+            wraplength=580,
+            fg="#444444",
+        ).grid(
+            row=7,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(10, 12),
+        )
+
+        def refresh_selected(*_args):
+            account = account_by_username.get(
+                username_var.get()
+            )
+
+            if not account:
+                return
+
+            email_var.set(
+                account.email
+            )
+            verify_var.set("")
+            new_password_var.set("")
+            confirm_var.set("")
+            status_var.set(
+                (
+                    "Conta ativa: "
+                    + (
+                        "SIM"
+                        if account.is_active
+                        else "NÃO"
+                    )
+                    + " | Senha utilizável: "
+                    + (
+                        "SIM"
+                        if account.has_usable_password
+                        else "NÃO"
+                    )
+                    + " | Administrador: "
+                    + (
+                        "SIM"
+                        if account.is_superuser
+                        else "NÃO"
+                    )
+                    + "\nUse exatamente o usuário exibido acima. "
+                    "O site desta versão também aceita diferença "
+                    "entre maiúsculas/minúsculas no login."
+                )
+            )
+
+        combo.bind(
+            "<<ComboboxSelected>>",
+            refresh_selected,
+        )
+
+        def verify_password_action():
+            password = verify_var.get()
+
+            if not password:
+                messagebox.showwarning(
+                    "Verificar senha",
+                    "Digite a senha que deseja verificar.",
+                    parent=window,
+                )
+                return
+
+            try:
+                valid = verify_account_password(
+                    username=username_var.get(),
+                    password=password,
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Verificar senha",
+                    str(exc),
+                    parent=window,
+                )
+                return
+
+            if valid:
+                messagebox.showinfo(
+                    "Verificar senha",
+                    (
+                        "A senha informada confere com o hash "
+                        "gravado no banco.\n\n"
+                        "Se o site ainda negar o acesso, havia "
+                        "provavelmente um bloqueio temporário de "
+                        "tentativas ou diferença de maiúsculas/minúsculas."
+                    ),
+                    parent=window,
+                )
+            else:
+                messagebox.showwarning(
+                    "Verificar senha",
+                    (
+                        "A senha informada NÃO confere com a senha "
+                        "gravada para este usuário."
+                    ),
+                    parent=window,
+                )
+
+        def save_account_action():
+            username = username_var.get()
+            email = email_var.get().strip()
+            new_password = new_password_var.get()
+            confirm_password = confirm_var.get()
+
+            if new_password != confirm_password:
+                messagebox.showerror(
+                    "Redefinir senha",
+                    "A confirmação da nova senha não confere.",
+                    parent=window,
+                )
+                return
+
+            if not new_password and not email:
+                messagebox.showwarning(
+                    "Usuários / recuperação",
+                    (
+                        "Informe um e-mail e/ou uma nova senha."
+                    ),
+                    parent=window,
+                )
+                return
+
+            if new_password:
+                confirm_reset = messagebox.askyesno(
+                    "Confirmar redefinição",
+                    (
+                        f"Deseja redefinir a senha do usuário "
+                        f"'{username}'?\n\n"
+                        "Os bloqueios temporários de login também "
+                        "serão limpos para permitir o teste imediato."
+                    ),
+                    parent=window,
+                )
+
+                if not confirm_reset:
+                    return
+
+            try:
+                info = save_account_recovery(
+                    username=username,
+                    email=email,
+                    new_password=(
+                        new_password
+                        if new_password
+                        else None
+                    ),
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Usuários / recuperação",
+                    str(exc),
+                    parent=window,
+                )
+                return
+
+            account_by_username[
+                info.username
+            ] = info
+            verify_var.set("")
+            new_password_var.set("")
+            confirm_var.set("")
+            refresh_selected()
+
+            messagebox.showinfo(
+                "Usuários / recuperação",
+                (
+                    "Dados salvos com sucesso.\n\n"
+                    "Se a senha foi redefinida, você já pode "
+                    "testá-la no login."
+                ),
+                parent=window,
+            )
+
+        def smtp_config_action():
+            self.smtp_config_dialog(
+                parent=window,
+                recipient=email_var.get().strip(),
+            )
+
+        buttons = tk.Frame(frame)
+        buttons.grid(
+            row=8,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(4, 0),
+        )
+
+        tk.Button(
+            buttons,
+            text="Verificar senha",
+            command=verify_password_action,
+            height=2,
+        ).pack(
+            side="left",
+            padx=(0, 6),
+        )
+        tk.Button(
+            buttons,
+            text="Salvar / redefinir",
+            command=save_account_action,
+            height=2,
+        ).pack(
+            side="left",
+            padx=6,
+        )
+        tk.Button(
+            buttons,
+            text="Configurar SMTP",
+            command=smtp_config_action,
+            height=2,
+        ).pack(
+            side="left",
+            padx=6,
+        )
+        tk.Button(
+            buttons,
+            text="Fechar",
+            command=window.destroy,
+            height=2,
+        ).pack(
+            side="right",
+        )
+
+        frame.columnconfigure(
+            1,
+            weight=1,
+        )
+
+        username_var.set(
+            accounts[0].username
+        )
+        refresh_selected()
+
+    def smtp_config_dialog(
+        self,
+        *,
+        parent,
+        recipient: str,
+    ):
+        ensure_env_file()
+        current = read_env_values()
+
+        window = tk.Toplevel(parent)
+        window.title(
+            "Financeiro OFX - SMTP"
+        )
+        window.geometry(
+            "620x560"
+        )
+        window.transient(parent)
+        window.grab_set()
+
+        frame = tk.Frame(
+            window,
+            padx=18,
+            pady=18,
+        )
+        frame.pack(
+            fill="both",
+            expand=True,
+        )
+
+        tk.Label(
+            frame,
+            text="Servidor de e-mail para recuperação",
+            font=(
+                "Segoe UI",
+                14,
+                "bold",
+            ),
+        ).grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 10),
+        )
+
+        values = {
+            "EMAIL_HOST": tk.StringVar(
+                value=current.get(
+                    "EMAIL_HOST",
+                    "",
+                )
+            ),
+            "EMAIL_PORT": tk.StringVar(
+                value=current.get(
+                    "EMAIL_PORT",
+                    "587",
+                )
+            ),
+            "EMAIL_HOST_USER": tk.StringVar(
+                value=current.get(
+                    "EMAIL_HOST_USER",
+                    "",
+                )
+            ),
+            "EMAIL_HOST_PASSWORD": tk.StringVar(),
+            "DEFAULT_FROM_EMAIL": tk.StringVar(
+                value=current.get(
+                    "DEFAULT_FROM_EMAIL",
+                    "",
+                )
+            ),
+        }
+        tls_var = tk.BooleanVar(
+            value=env_flag_from_values(
+                current,
+                "EMAIL_USE_TLS",
+                True,
+            )
+        )
+        ssl_var = tk.BooleanVar(
+            value=env_flag_from_values(
+                current,
+                "EMAIL_USE_SSL",
+                False,
+            )
+        )
+        enabled_var = tk.BooleanVar(
+            value=env_flag_from_values(
+                current,
+                "PASSWORD_RECOVERY_EMAIL_ENABLED",
+                False,
+            )
+        )
+
+        rows = [
+            (
+                "Servidor SMTP",
+                "EMAIL_HOST",
+                False,
+            ),
+            (
+                "Porta",
+                "EMAIL_PORT",
+                False,
+            ),
+            (
+                "Usuário SMTP",
+                "EMAIL_HOST_USER",
+                False,
+            ),
+            (
+                "Senha / App Password",
+                "EMAIL_HOST_PASSWORD",
+                True,
+            ),
+            (
+                "E-mail remetente",
+                "DEFAULT_FROM_EMAIL",
+                False,
+            ),
+        ]
+
+        for index, (
+            label,
+            key,
+            secret,
+        ) in enumerate(
+            rows,
+            start=1,
+        ):
+            tk.Label(
+                frame,
+                text=label,
+            ).grid(
+                row=index,
+                column=0,
+                sticky="w",
+                pady=4,
+            )
+            tk.Entry(
+                frame,
+                textvariable=values[key],
+                show=(
+                    "•"
+                    if secret
+                    else ""
+                ),
+            ).grid(
+                row=index,
+                column=1,
+                sticky="ew",
+                pady=4,
+            )
+
+        tk.Checkbutton(
+            frame,
+            text="Usar TLS/STARTTLS",
+            variable=tls_var,
+        ).grid(
+            row=6,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=4,
+        )
+        tk.Checkbutton(
+            frame,
+            text="Usar SSL direto",
+            variable=ssl_var,
+        ).grid(
+            row=7,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=4,
+        )
+        tk.Checkbutton(
+            frame,
+            text="Habilitar recuperação por e-mail",
+            variable=enabled_var,
+        ).grid(
+            row=8,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=4,
+        )
+
+        tk.Label(
+            frame,
+            text=(
+                "A senha SMTP fica somente no .env local, que não é "
+                "enviado ao GitHub. Deixe a senha em branco para "
+                "preservar a já configurada."
+            ),
+            justify="left",
+            wraplength=560,
+        ).grid(
+            row=9,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(10, 12),
+        )
+
+        def collect_config():
+            if (
+                tls_var.get()
+                and ssl_var.get()
+            ):
+                raise RuntimeError(
+                    (
+                        "Escolha TLS ou SSL direto, não ambos."
+                    )
+                )
+
+            password = values[
+                "EMAIL_HOST_PASSWORD"
+            ].get()
+
+            updates = {
+                "PASSWORD_RECOVERY_EMAIL_ENABLED": (
+                    "True"
+                    if enabled_var.get()
+                    else "False"
+                ),
+                "EMAIL_BACKEND": (
+                    "django.core.mail.backends.smtp.EmailBackend"
+                ),
+                "EMAIL_HOST": values[
+                    "EMAIL_HOST"
+                ].get().strip(),
+                "EMAIL_PORT": values[
+                    "EMAIL_PORT"
+                ].get().strip()
+                or "587",
+                "EMAIL_HOST_USER": values[
+                    "EMAIL_HOST_USER"
+                ].get().strip(),
+                "EMAIL_USE_TLS": (
+                    "True"
+                    if tls_var.get()
+                    else "False"
+                ),
+                "EMAIL_USE_SSL": (
+                    "True"
+                    if ssl_var.get()
+                    else "False"
+                ),
+                "EMAIL_TIMEOUT_SECONDS": "15",
+                "DEFAULT_FROM_EMAIL": values[
+                    "DEFAULT_FROM_EMAIL"
+                ].get().strip(),
+                "PASSWORD_RESET_TIMEOUT_SECONDS": "3600",
+            }
+
+            if password:
+                updates[
+                    "EMAIL_HOST_PASSWORD"
+                ] = password
+            else:
+                updates[
+                    "EMAIL_HOST_PASSWORD"
+                ] = current.get(
+                    "EMAIL_HOST_PASSWORD",
+                    "",
+                )
+
+            return updates
+
+        def save_smtp():
+            try:
+                updates = collect_config()
+                update_env_values(
+                    updates
+                )
+
+                if server_running():
+                    restart_server()
+
+                messagebox.showinfo(
+                    "SMTP",
+                    (
+                        "Configuração salva.\n\n"
+                        "O servidor foi reiniciado quando necessário "
+                        "para aplicar as novas opções."
+                    ),
+                    parent=window,
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "SMTP",
+                    str(exc),
+                    parent=window,
+                )
+
+        def test_smtp():
+            try:
+                updates = collect_config()
+                send_smtp_test(
+                    recipient=recipient,
+                    config=updates,
+                )
+                messagebox.showinfo(
+                    "SMTP",
+                    (
+                        "E-mail de teste enviado para:\n"
+                        f"{recipient}"
+                    ),
+                    parent=window,
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "SMTP",
+                    (
+                        "Falha no teste SMTP:\n\n"
+                        f"{exc}"
+                    ),
+                    parent=window,
+                )
+
+        buttons = tk.Frame(frame)
+        buttons.grid(
+            row=10,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            pady=(8, 0),
+        )
+
+        tk.Button(
+            buttons,
+            text="Salvar",
+            command=save_smtp,
+            height=2,
+        ).pack(
+            side="left",
+            padx=(0, 6),
+        )
+        tk.Button(
+            buttons,
+            text="Enviar teste",
+            command=test_smtp,
+            height=2,
+        ).pack(
+            side="left",
+            padx=6,
+        )
+        tk.Button(
+            buttons,
+            text="Fechar",
+            command=window.destroy,
+            height=2,
+        ).pack(
+            side="right",
+        )
+
+        frame.columnconfigure(
+            1,
+            weight=1,
+        )
 
     def start_action(self):
         try:
@@ -1571,8 +2714,13 @@ class ManagerApp(tk.Tk):
     def install_task_action(self):
         try:
             install_startup_task()
+            if not server_running():
+                run_startup_task_now()
             self.log(
-                "Inicialização automática ativada."
+                (
+                    "Inicialização automática ativada e validada. "
+                    "O servidor iniciará ao entrar no Windows."
+                )
             )
         except Exception as exc:
             messagebox.showerror(
@@ -1592,8 +2740,25 @@ class ManagerApp(tk.Tk):
 
 if __name__ == "__main__":
     if "--start" in sys.argv:
-        start_server()
-        raise SystemExit(0)
+        try:
+            start_server()
+            raise SystemExit(0)
+        except Exception as exc:
+            LOG_DIR.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            with LOG_FILE.open(
+                "a",
+                encoding="utf-8",
+            ) as log:
+                log.write(
+                    (
+                        "Falha na inicialização automática: "
+                        f"{exc}\n"
+                    )
+                )
+            raise SystemExit(1)
 
     if "--stop" in sys.argv:
         stop_server()

@@ -187,3 +187,21 @@ Mesmo assim, esse acesso utiliza HTTP. Portanto:
 
 Para voltar ao modo mais restrito, use `Fechar acesso de rede`. O servidor
 volta para `127.0.0.1` mesmo se a remoção da regra do Firewall falhar.
+
+
+## Recuperação de senha
+
+- senhas continuam armazenadas pelos hashers do Django; a senha atual não pode
+  ser exibida nem recuperada em texto claro;
+- o Gerenciador local pode apenas verificar um candidato com `check_password()`
+  ou gravar uma nova senha com `set_password()`;
+- a redefinição local exige acesso ao computador e ao banco SQLite da aplicação;
+- alteração do e-mail de recuperação dentro do site exige a senha atual;
+- recuperação por e-mail mantém resposta genérica para não revelar se um
+  endereço está ou não cadastrado;
+- links de recuperação usam tokens de uso único e expiram em 1 hora nesta
+  configuração;
+- o fluxo de recuperação por link é bloqueado em HTTP remoto/LAN e permitido
+  apenas em localhost ou HTTPS;
+- credenciais SMTP ficam somente no `.env` local e não devem ser publicadas no
+  GitHub.

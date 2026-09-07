@@ -1,4 +1,143 @@
-# Financeiro OFX — Etapa 10.5
+# Financeiro OFX — Etapa 10.7
+
+
+
+## Etapa 10.7 — Recuperação de acesso e e-mail de recuperação
+
+A autenticação foi revisada após um cenário em que uma senha correta podia
+continuar sendo recusada.
+
+Foram encontrados dois pontos importantes no fluxo anterior:
+
+1. o username armazenado podia ser `thiago` e o login digitado como `Thiago`;
+2. após o limite de falhas, o bloqueio temporário era aplicado, mas o template
+   substituía a mensagem específica por `Usuário ou senha inválidos`.
+
+A partir desta etapa:
+
+- o login resolve o username de forma case-insensitive antes de autenticar;
+- o rate limiter continua ativo;
+- quando houver bloqueio temporário, a tela informa que é necessário aguardar;
+- o Gerenciador ganhou `Usuários / recuperação`;
+- a tela local permite verificar se uma senha confere com o hash existente;
+- é possível redefinir a senha sem PowerShell;
+- uma redefinição local limpa os bloqueios temporários para permitir teste
+  imediato;
+- a conta pode armazenar um e-mail de recuperação;
+- o usuário autenticado pode alterar o próprio e-mail em `Minha conta`,
+  confirmando a senha atual;
+- o login possui `Esqueci minha senha`;
+- a redefinição por e-mail usa o fluxo nativo de tokens de uso único do Django.
+
+### Recuperação local pelo Gerenciador
+
+Use:
+
+```text
+Gerenciar-Financeiro-OFX.bat
+→ Usuários / recuperação
+```
+
+A tela mostra o username exatamente como está no banco e permite:
+
+```text
+Verificar senha
+Cadastrar/alterar e-mail de recuperação
+Redefinir senha
+Configurar SMTP
+Enviar e-mail de teste
+```
+
+A senha é validada com `User.check_password()` e redefinida com
+`User.set_password()`. Nunca é possível recuperar a senha original em texto
+claro, porque o Django armazena hash, não a senha reversível.
+
+### Perfil do usuário
+
+O nome do usuário no canto superior da aplicação passou a abrir:
+
+```text
+Minha conta
+```
+
+Nessa página o e-mail de recuperação pode ser alterado. A senha atual é
+obrigatória para alterar o endereço, reduzindo o risco de uma sessão aberta
+ser usada para trocar silenciosamente o destino da recuperação.
+
+### SMTP
+
+A recuperação por e-mail fica desativada até a configuração ser validada.
+No Gerenciador, em `Usuários / recuperação → Configurar SMTP`, podem ser
+informados:
+
+```text
+Servidor SMTP
+Porta
+Usuário SMTP
+Senha / App Password
+E-mail remetente
+TLS/STARTTLS ou SSL direto
+```
+
+As configurações ficam no `.env` local, que permanece fora do GitHub.
+Depois de salvar, o servidor é reiniciado quando necessário.
+
+Variáveis adicionadas:
+
+```text
+PASSWORD_RECOVERY_EMAIL_ENABLED=False
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=
+EMAIL_PORT=587
+EMAIL_HOST_USER=
+EMAIL_HOST_PASSWORD=
+EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
+EMAIL_TIMEOUT_SECONDS=15
+DEFAULT_FROM_EMAIL=
+PASSWORD_RESET_TIMEOUT_SECONDS=3600
+```
+
+O token de redefinição expira em 1 hora por padrão nesta aplicação.
+
+Por segurança, solicitação e confirmação de recuperação só são aceitas em
+localhost ou quando o Django reconhece uma conexão HTTPS. O modo LAN em HTTP
+não permite redefinição de senha por link.
+
+## Etapa 10.6 — Inicialização automática sem abrir o Gerenciador
+
+A opção `Instalar / Atualizar` agora recria e testa a inicialização automática do servidor.
+Depois da instalação, o Financeiro OFX sobe sozinho quando o usuário entra no Windows; não é necessário abrir o Gerenciador manualmente.
+
+A implementação continua usando o Agendador de Tarefas do Windows com gatilho `ONLOGON`, executando diretamente:
+
+```text
+.venv\Scripts\pythonw.exe windows_manager.py --start
+```
+
+O antigo `windows/start_hidden.vbs` foi removido. O agendamento é criado com 10 segundos de atraso para permitir que o perfil do usuário e a rede terminem de inicializar.
+
+Esse modo foi mantido de propósito em vez de transformar o aplicativo em um serviço `LocalSystem`: o projeto usa Python e `.venv` instalados no perfil do usuário, e executar o servidor web como `SYSTEM` aumentaria desnecessariamente os privilégios do processo. O resultado prático desejado é mantido: após reiniciar e entrar no Windows, o site fica disponível automaticamente.
+
+Durante `Instalar / Atualizar`, o Gerenciador agora:
+
+```text
+recria o agendamento
+→ para o servidor atual
+→ aciona a própria tarefa agendada
+→ confirma que http://127.0.0.1:8000 responde
+→ só então informa sucesso
+```
+
+O status passou a distinguir:
+
+```text
+Inicialização automática: ATIVA (ao entrar no Windows)
+Inicialização automática: PRECISA SER RECONFIGURADA
+Inicialização automática: DESATIVADA
+```
+
+Se a inicialização automática falhar fora da interface gráfica, o erro é registrado em `logs/manager.log`.
 
 
 

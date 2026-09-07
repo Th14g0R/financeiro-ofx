@@ -59,6 +59,14 @@ class SecurityEvent(models.Model):
             "LOGIN_SUCCESS",
             "Login realizado",
         )
+        LOCAL_ACCOUNT_RECOVERY = (
+            "LOCAL_ACCOUNT_RECOVERY",
+            "Recuperação local de acesso",
+        )
+        PROFILE_UPDATED = (
+            "PROFILE_UPDATED",
+            "Perfil atualizado",
+        )
         INTEGRATION_CREATED = (
             "INTEGRATION_CREATED",
             "Integração criada",

@@ -30,7 +30,9 @@
                                 class="alert alert-danger"
                                 role="alert"
                             >
-                                Usuário ou senha inválidos.
+                                {% for error in form.non_field_errors %}
+                                    <div>{{ error }}</div>
+                                {% endfor %}
                             </div>
                         {% endif %}
 
@@ -89,6 +91,15 @@
                                 >
                                     Entrar
                                 </button>
+                            </div>
+
+                            <div class="text-center mt-3">
+                                <a
+                                    href="{% url 'password_reset' %}"
+                                    class="small text-decoration-none"
+                                >
+                                    Esqueci minha senha
+                                </a>
                             </div>
                         </form>
 

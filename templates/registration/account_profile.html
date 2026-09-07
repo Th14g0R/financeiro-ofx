@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Minha conta | Financeiro OFX{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 760px;">
+    <div class="mb-4">
+        <h1 class="h3 mb-1">Minha conta</h1>
+        <p class="text-secondary mb-0">
+            Configure o e-mail usado para recuperação de senha.
+        </p>
+    </div>
+
+    <div class="card border-0 shadow-sm">
+        <div class="card-body p-4">
+            <div class="mb-4">
+                <div class="small text-secondary">Usuário</div>
+                <div class="fw-semibold">{{ request.user.username }}</div>
+            </div>
+
+            {% if not recovery_email_enabled %}
+                <div class="alert alert-warning">
+                    O e-mail pode ser cadastrado agora, mas o envio SMTP ainda
+                    não está habilitado. Configure-o em
+                    <strong>Gerenciador → Usuários / recuperação</strong>.
+                </div>
+            {% endif %}
+
+            <form method="post" novalidate>
+                {% csrf_token %}
+
+                <div class="mb-3">
+                    <label class="form-label" for="{{ form.email.id_for_label }}">
+                        {{ form.email.label }}
+                    </label>
+                    {{ form.email }}
+                    {% for error in form.email.errors %}
+                        <div class="text-danger small mt-1">{{ error }}</div>
+                    {% endfor %}
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label" for="{{ form.current_password.id_for_label }}">
+                        {{ form.current_password.label }}
+                    </label>
+                    {{ form.current_password }}
+                    <div class="form-text">
+                        A senha atual é exigida para impedir alteração indevida
+                        do endereço de recuperação em uma sessão aberta.
+                    </div>
+                    {% for error in form.current_password.errors %}
+                        <div class="text-danger small mt-1">{{ error }}</div>
+                    {% endfor %}
+                </div>
+
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="submit" class="btn btn-primary">
+                        Salvar e-mail de recuperação
+                    </button>
+                    <a href="{% url 'password_change' %}" class="btn btn-outline-secondary">
+                        Alterar minha senha
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
