@@ -238,3 +238,15 @@ O comando agrega os checks de deploy do Django e verificações locais de
 configuração, CSRF, escaping, padrões de injeção, segredos e recursos externos.
 Consulte `SECURITY_AUDIT.md`.
 
+
+
+## Controle do processo no Windows
+
+O endpoint `/__health__/` não exige autenticação porque é utilizado pelo
+Gerenciador antes do login. Ele não retorna dados financeiros, usuário,
+configurações ou segredos. O PID é retornado somente em loopback e é usado para
+impedir que o botão de parada encerre um processo não relacionado.
+
+A elevação UAC utilizada para registrar a tarefa automática ou encerrar um
+servidor legado é transitória. O processo Waitress normal continua executando
+com privilégios limitados do usuário atual.

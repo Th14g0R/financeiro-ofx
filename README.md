@@ -1,5 +1,41 @@
-# Financeiro OFX — Etapa 10.8.1
+# Financeiro OFX — Etapa 10.8.2
 
+
+
+## Etapa 10.8.2 — Gerenciador: parada real do servidor e inicialização automática via UAC
+
+Esta revisão corrige dois problemas de controle do processo no Windows:
+
+1. O botão **Parar servidor** não considera mais a operação concluída apenas
+   porque `taskkill` foi executado. O Gerenciador confirma que o Financeiro OFX
+   realmente deixou de responder. Se um servidor legado tiver sido iniciado
+   com token elevado, o Windows solicitará UAC para encerrar somente o
+   `serve_waitress.py` desta instalação.
+2. A criação da tarefa `FinanceiroOFX` no Agendador do Windows agora solicita
+   elevação administrativa somente para **registrar a tarefa**. A tarefa
+   registrada continua executando no usuário atual com `LogonType Interactive`
+   e `RunLevel Limited`, portanto o servidor web não roda como Administrador.
+
+Foi adicionado o endpoint técnico `GET /__health__/`. Ele retorna apenas a
+assinatura da aplicação e o estado. O PID do processo é incluído somente para
+requisições loopback (`127.0.0.1`/`::1`), permitindo que o Gerenciador identifique
+com precisão qual processo deve encerrar sem expor esse dado pela LAN.
+
+A instalação também separa duas fases: se testes, auditoria, migrations e
+`collectstatic` terminarem com sucesso, a aplicação é considerada atualizada.
+Uma eventual falha ao registrar a inicialização automática gera um **aviso** e
+não mais a mensagem incorreta de que toda a instalação falhou.
+
+Arquivos Windows adicionados:
+
+```text
+windows/startup_task.ps1
+windows/server_process.ps1
+```
+
+O primeiro usa os cmdlets oficiais `ScheduledTasks`; o segundo valida a linha de
+comando do PID antes de usar `taskkill`, evitando encerrar outro processo por
+engano.
 
 
 ## Etapa 10.8.1 — Correção da auditoria de segurança

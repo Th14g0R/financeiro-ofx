@@ -3,6 +3,7 @@ from django.contrib.auth import views as auth_views
 from django.urls import include
 from django.urls import path
 
+from core.health import health_check
 from core.views import home
 from core.views_security import SecureLoginView
 from core.views_security import SecurePasswordChangeView
@@ -17,6 +18,11 @@ from core.views_users import user_update
 
 
 urlpatterns = [
+    path(
+        "__health__/",
+        health_check,
+        name="health_check",
+    ),
     path(
         "usuarios/",
         user_list,

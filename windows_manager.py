@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import os
 import secrets
 import shutil
@@ -35,8 +36,11 @@ LOG_FILE = LOG_DIR / "manager.log"
 BACKUP_DIR = BASE_DIR / "backups"
 TASK_NAME = "FinanceiroOFX"
 FIREWALL_SCRIPT = BASE_DIR / "windows" / "network_access.ps1"
+STARTUP_TASK_SCRIPT = BASE_DIR / "windows" / "startup_task.ps1"
+SERVER_PROCESS_SCRIPT = BASE_DIR / "windows" / "server_process.ps1"
 FIREWALL_RULE_NAME = "Financeiro OFX - Rede Local"
 APP_URL = "http://127.0.0.1:8000/"
+APP_HEALTH_URL = APP_URL + "__health__/"
 
 
 def _secret_key_is_insecure(
@@ -558,6 +562,132 @@ def _powershell_single_quote(
     )
 
 
+def _run_elevated_powershell(
+    command: str,
+) -> None:
+    encoded = base64.b64encode(
+        command.encode(
+            "utf-16le"
+        )
+    ).decode(
+        "ascii"
+    )
+
+    elevated_command = (
+        "$process = Start-Process "
+        "-FilePath 'powershell.exe' "
+        "-ArgumentList @(" 
+        "'-NoProfile',"
+        "'-ExecutionPolicy','Bypass',"
+        "'-EncodedCommand',"
+        f"'{encoded}'"
+        ") "
+        "-Verb RunAs "
+        "-Wait "
+        "-PassThru;"
+        "exit $process.ExitCode"
+    )
+
+    result = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            elevated_command,
+        ],
+        cwd=BASE_DIR,
+        text=True,
+        capture_output=True,
+        creationflags=creation_flags(),
+    )
+
+    if result.returncode != 0:
+        detail = (
+            result.stderr
+            or result.stdout
+            or (
+                "A operação foi cancelada ou o Windows "
+                "recusou a elevação de privilégios."
+            )
+        ).strip()
+
+        raise RuntimeError(
+            detail
+        )
+
+
+def _powershell_script_command(
+    script_path: Path,
+    parameters: dict[str, str | int],
+) -> str:
+    parts = [
+        "&",
+        _powershell_single_quote(
+            str(script_path)
+        ),
+    ]
+
+    for name, value in parameters.items():
+        parts.append(
+            f"-{name}"
+        )
+        parts.append(
+            _powershell_single_quote(
+                str(value)
+            )
+        )
+
+    return " ".join(
+        parts
+    )
+
+
+def current_windows_user() -> str:
+    result = run_command(
+        [
+            "whoami",
+        ],
+        check=False,
+    )
+
+    value = (
+        result.stdout
+        or ""
+    ).strip()
+
+    if value:
+        return value
+
+    username = (
+        os.environ.get(
+            "USERNAME",
+            "",
+        )
+        .strip()
+    )
+    domain = (
+        os.environ.get(
+            "USERDOMAIN",
+            "",
+        )
+        .strip()
+    )
+
+    if username and domain:
+        return (
+            f"{domain}\\{username}"
+        )
+
+    if username:
+        return username
+
+    raise RuntimeError(
+        "Não foi possível identificar o usuário atual do Windows."
+    )
+
+
 def run_firewall_action(
     action: str,
 ):
@@ -866,12 +996,44 @@ def is_process_running(pid: int) -> bool:
     return str(pid) in result.stdout
 
 
-def server_running() -> bool:
-    pid = read_pid()
+def _health_info(
+    timeout: float = 1.0,
+) -> dict | None:
+    try:
+        with urllib.request.urlopen(
+            APP_HEALTH_URL,
+            timeout=timeout,
+        ) as response:
+            payload = json.loads(
+                response.read().decode(
+                    "utf-8"
+                )
+            )
+    except Exception:
+        return None
 
-    if pid and is_process_running(pid):
-        return True
+    if not isinstance(
+        payload,
+        dict,
+    ):
+        return None
 
+    if (
+        payload.get(
+            "application"
+        )
+        != "financeiro-ofx"
+        or payload.get(
+            "status"
+        )
+        != "ok"
+    ):
+        return None
+
+    return payload
+
+
+def _legacy_server_responding() -> bool:
     try:
         with urllib.request.urlopen(
             APP_URL,
@@ -882,23 +1044,157 @@ def server_running() -> bool:
         return False
 
 
-def stop_server():
+def running_server_pid() -> int | None:
+    health = _health_info()
+
+    if health:
+        try:
+            pid = int(
+                health.get(
+                    "pid"
+                )
+            )
+        except (
+            TypeError,
+            ValueError,
+        ):
+            pid = None
+
+        if (
+            pid
+            and is_process_running(
+                pid
+            )
+        ):
+            return pid
+
+    # Compatibilidade com servidor iniciado por uma versão anterior,
+    # que ainda não possuía /__health__/.
     pid = read_pid()
 
-    if pid and is_process_running(pid):
-        run_command(
-            [
-                "taskkill",
-                "/PID",
-                str(pid),
-                "/T",
-                "/F",
-            ],
-            check=False,
+    if (
+        pid
+        and is_process_running(
+            pid
+        )
+        and _legacy_server_responding()
+    ):
+        return pid
+
+    return None
+
+
+def server_running() -> bool:
+    if _health_info():
+        return True
+
+    return (
+        running_server_pid()
+        is not None
+    )
+
+
+def _wait_server_stopped(
+    timeout_seconds: float = 5.0,
+) -> bool:
+    deadline = (
+        time.monotonic()
+        + timeout_seconds
+    )
+
+    while time.monotonic() < deadline:
+        if not server_running():
+            return True
+        time.sleep(0.1)
+
+    return not server_running()
+
+
+def _elevated_stop_server_process(
+    pid: int,
+) -> None:
+    if not SERVER_PROCESS_SCRIPT.exists():
+        raise RuntimeError(
+            (
+                "Script de encerramento seguro não encontrado: "
+                f"{SERVER_PROCESS_SCRIPT}"
+            )
+        )
+
+    command = _powershell_script_command(
+        SERVER_PROCESS_SCRIPT,
+        {
+            "ProcessId": pid,
+            "ProjectDir": str(
+                BASE_DIR
+            ),
+        },
+    )
+    _run_elevated_powershell(
+        command
+    )
+
+
+def stop_server():
+    pid = running_server_pid()
+
+    if pid is None:
+        # PID antigo/stale não deve fazer o Gerenciador matar um processo
+        # reutilizado por outra aplicação.
+        try:
+            PID_FILE.unlink(
+                missing_ok=True
+            )
+        except OSError:
+            pass
+        return
+
+    result = run_command(
+        [
+            "taskkill",
+            "/PID",
+            str(pid),
+            "/T",
+            "/F",
+        ],
+        check=False,
+    )
+
+    if not _wait_server_stopped(
+        2.5
+    ):
+        # Um servidor legado pode ter sido iniciado por uma tarefa antiga
+        # com token elevado. Nesse caso, pedimos UAC somente para encerrar
+        # ESTE serve_waitress.py, validado pelo script PowerShell.
+        _elevated_stop_server_process(
+            pid
+        )
+
+    if not _wait_server_stopped(
+        5.0
+    ):
+        detail = (
+            result.stderr
+            or result.stdout
+            or ""
+        ).strip()
+
+        raise RuntimeError(
+            (
+                "O Financeiro OFX ainda está respondendo após a "
+                "tentativa de encerramento."
+                + (
+                    f"\n\n{detail}"
+                    if detail
+                    else ""
+                )
+            )
         )
 
     try:
-        PID_FILE.unlink(missing_ok=True)
+        PID_FILE.unlink(
+            missing_ok=True
+        )
     except OSError:
         pass
 
@@ -957,8 +1253,6 @@ def start_server():
 
 
 def build_task_command() -> str:
-    # Usa pythonw diretamente: não abre janela e não depende de VBS.
-    # O próprio windows_manager --start valida se o servidor já está ativo.
     return (
         f'"{PYTHONW}" "{Path(__file__).resolve()}" --start'
     )
@@ -999,11 +1293,59 @@ def task_is_configured_for_autostart() -> bool:
 
     output = result.stdout.lower()
 
-    # A saída do schtasks é localizada, por isso evitamos depender do
-    # rótulo do campo. O comando e o gatilho aparecem no conteúdo.
     return (
-        str(PYTHONW).lower() in output
+        str(PYTHONW).lower()
+        in output
         and "--start" in output
+    )
+
+
+def _startup_task_elevated_action(
+    action: str,
+) -> None:
+    if action not in {
+        "Install",
+        "Remove",
+        "Run",
+    }:
+        raise ValueError(
+            "Ação de inicialização automática inválida."
+        )
+
+    if not STARTUP_TASK_SCRIPT.exists():
+        raise RuntimeError(
+            (
+                "Script da inicialização automática não encontrado: "
+                f"{STARTUP_TASK_SCRIPT}"
+            )
+        )
+
+    parameters: dict[str, str] = {
+        "Action": action,
+        "TaskName": TASK_NAME,
+    }
+
+    if action == "Install":
+        parameters.update(
+            {
+                "Pythonw": str(
+                    PYTHONW
+                ),
+                "Manager": str(
+                    Path(__file__).resolve()
+                ),
+                "RunAsUser": (
+                    current_windows_user()
+                ),
+            }
+        )
+
+    command = _powershell_script_command(
+        STARTUP_TASK_SCRIPT,
+        parameters,
+    )
+    _run_elevated_powershell(
+        command
     )
 
 
@@ -1013,37 +1355,31 @@ def install_startup_task():
             "pythonw.exe não encontrado. Execute primeiro Instalar/Atualizar."
         )
 
-    manager_path = Path(__file__).resolve()
+    manager_path = Path(
+        __file__
+    ).resolve()
 
     if not manager_path.exists():
         raise RuntimeError(
             f"Gerenciador não encontrado: {manager_path}"
         )
 
-    # ONLOGON é deliberado: o servidor roda no contexto do próprio usuário,
-    # sem elevar o processo web para SYSTEM. Depois do logon, nenhuma ação
-    # manual no Gerenciador é necessária.
-    run_command(
-        [
-            "schtasks",
-            "/Create",
-            "/TN",
-            TASK_NAME,
-            "/TR",
-            build_task_command(),
-            "/SC",
-            "ONLOGON",
-            "/DELAY",
-            "0000:10",
-            "/RL",
-            "LIMITED",
-            "/F",
-        ]
+    # O Windows exige privilégio administrativo para registrar/alterar
+    # tarefas do Agendador. O UAC é usado apenas para o registro; a tarefa
+    # em si fica com LogonType Interactive e RunLevel Limited para o usuário
+    # atual, portanto o servidor web NÃO roda elevado.
+    _startup_task_elevated_action(
+        "Install"
     )
 
     if not task_exists():
         raise RuntimeError(
-            "A tarefa de inicialização automática não pôde ser confirmada."
+            "A tarefa de inicialização automática foi criada, mas não pôde ser confirmada."
+        )
+
+    if not task_is_configured_for_autostart():
+        raise RuntimeError(
+            "A tarefa existe, mas não está configurada para iniciar o Financeiro OFX."
         )
 
 
@@ -1053,16 +1389,22 @@ def run_startup_task_now():
             "Inicialização automática ainda não está instalada."
         )
 
-    run_command(
+    result = run_command(
         [
             "schtasks",
             "/Run",
             "/TN",
             TASK_NAME,
-        ]
+        ],
+        check=False,
     )
 
-    for _ in range(50):
+    if result.returncode != 0:
+        _startup_task_elevated_action(
+            "Run"
+        )
+
+    for _ in range(75):
         if server_running():
             return
         time.sleep(0.2)
@@ -1076,7 +1418,10 @@ def run_startup_task_now():
 
 
 def remove_startup_task():
-    run_command(
+    if not task_exists():
+        return
+
+    result = run_command(
         [
             "schtasks",
             "/Delete",
@@ -1086,6 +1431,19 @@ def remove_startup_task():
         ],
         check=False,
     )
+
+    if (
+        result.returncode != 0
+        and task_exists()
+    ):
+        _startup_task_elevated_action(
+            "Remove"
+        )
+
+    if task_exists():
+        raise RuntimeError(
+            "A tarefa de inicialização automática ainda existe após a remoção."
+        )
 
 
 _DJANGO_READY = False
@@ -1472,10 +1830,27 @@ class ManagerApp(tk.Tk):
             else None
         )
 
+        active_pid = (
+            running_server_pid()
+            if running
+            else None
+        )
+
         self.status_var.set(
             (
                 "Servidor: "
-                + ("ATIVO" if running else "PARADO")
+                + (
+                    (
+                        "ATIVO"
+                        + (
+                            f" (PID {active_pid})"
+                            if active_pid
+                            else ""
+                        )
+                    )
+                    if running
+                    else "PARADO"
+                )
                 + "\nInicialização automática: "
                 + (
                     "ATIVA (ao entrar no Windows)"
@@ -1881,32 +2256,80 @@ class ManagerApp(tk.Tk):
             )
 
             self.log(
-                "Configurando inicialização automática do servidor..."
+                "Atualização da aplicação concluída com sucesso."
             )
-            install_startup_task()
 
-            stop_server()
-            run_startup_task_now()
+            startup_error = None
 
-            self.log(
-                (
-                    "Atualização concluída. Servidor iniciado e "
-                    "inicialização automática validada."
+            try:
+                self.log(
+                    (
+                        "Configurando inicialização automática do servidor. "
+                        "O Windows poderá solicitar autorização de administrador..."
+                    )
                 )
-            )
-            messagebox.showinfo(
-                "Financeiro OFX",
-                (
-                    "Instalação/atualização concluída.\n\n"
-                    "A inicialização automática do Financeiro OFX foi "
-                    "instalada e testada. Depois de reiniciar o computador, "
-                    "o servidor subirá sozinho assim que você entrar no Windows; "
-                    "não será necessário abrir o Gerenciador.\n\n"
-                    "Se o Gerenciador também foi atualizado pelo GitHub, "
-                    "feche esta janela e abra novamente para carregar "
-                    "a versão nova da interface."
-                ),
-            )
+                install_startup_task()
+
+                stop_server()
+                run_startup_task_now()
+
+                self.log(
+                    (
+                        "Inicialização automática instalada e validada. "
+                        "Servidor iniciado pela tarefa do Windows."
+                    )
+                )
+            except Exception as exc:
+                startup_error = exc
+                self.log(
+                    (
+                        "AVISO: a aplicação foi atualizada, mas a "
+                        "inicialização automática não pôde ser validada: "
+                        f"{exc}"
+                    )
+                )
+
+                if not server_running():
+                    try:
+                        start_server()
+                        self.log(
+                            "Servidor iniciado normalmente após a atualização."
+                        )
+                    except Exception as start_exc:
+                        self.log(
+                            (
+                                "ERRO ao iniciar o servidor após a atualização: "
+                                f"{start_exc}"
+                            )
+                        )
+
+            if startup_error is None:
+                messagebox.showinfo(
+                    "Financeiro OFX",
+                    (
+                        "Instalação/atualização concluída.\n\n"
+                        "A inicialização automática do Financeiro OFX foi "
+                        "instalada e testada. Depois de reiniciar o computador, "
+                        "o servidor subirá sozinho assim que você entrar no Windows; "
+                        "não será necessário abrir o Gerenciador.\n\n"
+                        "Se o Gerenciador também foi atualizado pelo GitHub, "
+                        "feche esta janela e abra novamente para carregar "
+                        "a versão nova da interface."
+                    ),
+                )
+            else:
+                messagebox.showwarning(
+                    "Atualização concluída",
+                    (
+                        "O Financeiro OFX foi atualizado corretamente, incluindo "
+                        "testes, auditoria, migrations e arquivos estáticos.\n\n"
+                        "Somente a inicialização automática do Windows não pôde "
+                        "ser configurada/validada.\n\n"
+                        f"Detalhe: {startup_error}\n\n"
+                        "Você pode usar o sistema normalmente e tentar novamente "
+                        "pelo botão 'Ativar início automático no Windows'."
+                    ),
+                )
         except Exception as exc:
             self.log(f"ERRO: {exc}")
             messagebox.showerror(
@@ -2734,9 +3157,23 @@ class ManagerApp(tk.Tk):
             self.refresh_status()
 
     def stop_action(self):
-        stop_server()
-        self.log("Servidor parado.")
-        self.refresh_status()
+        try:
+            stop_server()
+            if server_running():
+                raise RuntimeError(
+                    "O servidor continua ativo após a tentativa de parada."
+                )
+            self.log("Servidor parado e confirmado.")
+        except Exception as exc:
+            self.log(
+                f"ERRO ao parar servidor: {exc}"
+            )
+            messagebox.showerror(
+                "Erro",
+                str(exc),
+            )
+        finally:
+            self.refresh_status()
 
     def restart_action(self):
         try:
@@ -2904,6 +3341,9 @@ class ManagerApp(tk.Tk):
 
     def install_task_action(self):
         try:
+            self.log(
+                "Solicitando autorização do Windows para registrar a inicialização automática..."
+            )
             install_startup_task()
             if not server_running():
                 run_startup_task_now()
@@ -2922,11 +3362,21 @@ class ManagerApp(tk.Tk):
             self.refresh_status()
 
     def remove_task_action(self):
-        remove_startup_task()
-        self.log(
-            "Inicialização automática removida."
-        )
-        self.refresh_status()
+        try:
+            remove_startup_task()
+            self.log(
+                "Inicialização automática removida."
+            )
+        except Exception as exc:
+            self.log(
+                f"ERRO ao remover inicialização automática: {exc}"
+            )
+            messagebox.showerror(
+                "Erro",
+                str(exc),
+            )
+        finally:
+            self.refresh_status()
 
 
 if __name__ == "__main__":
