@@ -1,4 +1,72 @@
-# Financeiro OFX — Etapa 10.4
+# Financeiro OFX — Etapa 10.5
+
+
+
+## Etapa 10.5 — PDF AstroPay
+
+O importador PDF passou a reconhecer também o modelo mensal da AstroPay
+(`statement_BRL_YYYY_N.pdf`). O parser usa a estrutura real da tabela
+`Histórico de transações` e preserva o mesmo modelo canônico usado pelos demais
+importadores.
+
+### Regras do extrato AstroPay
+
+O PDF não fornece um ID bancário individual para cada linha. Por isso o sistema
+cria um FITID sintético e determinístico com:
+
+```text
+conta técnica AstroPay
++ data
++ descrição
++ valor assinado
++ saldo posterior à operação
+```
+
+O saldo posterior faz parte da identidade para permitir duas movimentações
+legítimas com a mesma data, descrição e valor (por exemplo, dois Cashbacks do
+mesmo valor no mesmo dia).
+
+A data de geração do PDF, a página e a posição visual NÃO fazem parte do FITID.
+Assim, baixar novamente o mesmo extrato gera os mesmos identificadores e o
+sistema reconhece as movimentações como já existentes.
+
+### Saldo inicial/anterior/final
+
+Linhas com:
+
+```text
+Saldo Inicial
+Saldo Anterior
+Saldo Final
+```
+
+são metadados do extrato e não são criadas como `Transaction`.
+
+O `Saldo Final` do resumo continua sendo salvo em `ledger_balance`, mas não
+entra como crédito ou débito. Isso evita duplicidade entre o fechamento de um
+mês e a abertura do mês seguinte.
+
+Meses sem movimentação real, contendo somente saldo inicial/final, são aceitos
+como extratos válidos com zero itens — não são marcados como falha.
+
+### Conta AstroPay
+
+Como o PDF não traz número de conta, o parser cria um identificador técnico
+estável usando titular + moeda. Na primeira importação o usuário pode cadastrar
+e vincular a conta normalmente; os próximos PDFs do mesmo titular/moeda são
+reconhecidos automaticamente.
+
+### Pessoas / contrapartes
+
+O resolver passou a reconhecer também o formato AstroPay:
+
+```text
+Ana Lucia Anastácio Da Silva Transferência Pix
+```
+
+como contraparte `Ana Lucia Anastácio Da Silva`. Prefixos bancários numéricos,
+como `58.876.922`, continuam sendo preservados como identificador bancário da
+contraparte, e não como parte do nome.
 
 
 

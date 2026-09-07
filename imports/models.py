@@ -76,6 +76,7 @@ class ImportFile(models.Model):
     class Provider(models.TextChoices):
         GENERIC = "GENERIC", "Genérico"
         MERCADO_PAGO = "MERCADO_PAGO", "Mercado Pago"
+        ASTROPAY = "ASTROPAY", "AstroPay"
 
     class Status(models.TextChoices):
         ANALYZED = "ANALYZED", "Analisado"

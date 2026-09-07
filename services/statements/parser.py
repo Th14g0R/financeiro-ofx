@@ -7,6 +7,8 @@ from services.ofx import OfxBrParser
 from services.ofx import OfxParseError
 from services.ofx.models import ParsedOfxFile
 
+from .astropay_pdf import AstroPayPdfParseError
+from .astropay_pdf import AstroPayPdfParser
 from .mercado_pago_csv import MercadoPagoCsvParseError
 from .mercado_pago_csv import MercadoPagoCsvParser
 from .mercado_pago_pdf import MercadoPagoPdfParseError
@@ -50,21 +52,37 @@ def parse_statement_bytes(
         )
 
     if extension == ".pdf":
-        parser = MercadoPagoPdfParser()
+        pdf_parsers = (
+            MercadoPagoPdfParser(),
+            AstroPayPdfParser(),
+        )
 
-        if not parser.can_parse(content):
+        parser = next(
+            (
+                candidate
+                for candidate in pdf_parsers
+                if candidate.can_parse(
+                    content
+                )
+            ),
+            None,
+        )
+
+        if parser is None:
             raise StatementParseError(
                 "PDF ainda não suportado. Nesta versão, "
-                "o importador PDF reconhece extratos de "
-                "conta do Mercado Pago. A arquitetura já "
-                "permite adicionar outros bancos por parser."
+                "o importador reconhece extratos PDF de "
+                "Mercado Pago e AstroPay."
             )
 
         try:
             parsed = parser.parse_bytes(
                 content
             )
-        except MercadoPagoPdfParseError as exc:
+        except (
+            MercadoPagoPdfParseError,
+            AstroPayPdfParseError,
+        ) as exc:
             raise StatementParseError(
                 str(exc)
             ) from exc

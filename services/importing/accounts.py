@@ -53,11 +53,14 @@ def suggested_account_values(
         else ""
     )
 
-    nickname = (
-        f"Conta {account_suffix}"
-        if account_suffix
-        else "Conta principal"
-    )
+    if statement.bank_id.strip().upper() == "ASTROPAY":
+        nickname = "AstroPay BRL"
+    else:
+        nickname = (
+            f"Conta {account_suffix}"
+            if account_suffix
+            else "Conta principal"
+        )
 
     bank_code = (
         statement.matched_bank.code

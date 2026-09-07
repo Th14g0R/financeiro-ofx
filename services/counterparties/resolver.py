@@ -304,6 +304,29 @@ def _candidate_segment_from_description(
     return ""
 
 
+def _candidate_from_trailing_transfer_label(
+    value: str,
+) -> str:
+    """
+    Alguns extratos (ex.: AstroPay) exibem o nome antes do rótulo:
+        NOME DA PESSOA Transferência Pix
+
+    Nesse caso, a contraparte é a parte anterior ao rótulo da operação.
+    """
+    match = re.match(
+        r"^(?P<name>.+?)\s+Transfer[eê]ncia\s+Pix\s*$",
+        value,
+        flags=re.IGNORECASE,
+    )
+
+    if not match:
+        return ""
+
+    return " ".join(
+        match.group("name").split()
+    ).strip()
+
+
 def _plausible_candidate_name(
     name: str,
 ) -> bool:
@@ -357,9 +380,16 @@ def extract_counterparty_candidate(
             )
         )
     elif transfer_context:
-        # Alguns bancos já removem o rótulo PIX/Transferência e deixam apenas
-        # "15/01 FRANCISCA ... 001/011" ou um identificador + nome.
-        segment = value
+        segment = (
+            _candidate_from_trailing_transfer_label(
+                value
+            )
+        )
+
+        if not segment:
+            # Alguns bancos já removem o rótulo PIX/Transferência e deixam apenas
+            # "15/01 FRANCISCA ... 001/011" ou um identificador + nome.
+            segment = value
     elif (
         _DATE_PREFIX_RE.match(value)
         or _BANK_IDENTIFIER_PREFIX_RE.match(

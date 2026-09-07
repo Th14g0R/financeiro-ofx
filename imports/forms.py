@@ -92,7 +92,7 @@ class MultipleOfxUploadForm(forms.Form):
         label="Arquivos de extrato",
         help_text=(
             "Selecione OFX/QFX. Também são aceitos PDF de extrato "
-            "Mercado Pago e CSV de relatório Mercado Pago. "
+            "Mercado Pago/AstroPay e CSV de relatório Mercado Pago. "
             "Limite: 20 MB por arquivo."
         ),
         widget=MultipleFileInput(
