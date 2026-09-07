@@ -415,7 +415,7 @@ class SecureLoginThrottleTests(TestCase):
         )
         self.assertContains(
             blocked,
-            "Usuário ou senha inválidos",
+            "Muitas tentativas de acesso",
             status_code=429,
         )
 

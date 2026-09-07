@@ -1,4 +1,26 @@
-# Financeiro OFX — Etapa 10.7
+# Financeiro OFX — Etapa 10.7.1
+
+
+## Etapa 10.7.1 — Correção do teste de bloqueio de login
+
+A Etapa 10.7 alterou corretamente a mensagem exibida quando o rate limit de
+login é acionado, passando de uma mensagem genérica de credenciais inválidas
+para uma mensagem explícita de bloqueio temporário.
+
+Um teste antigo ainda esperava o texto anterior:
+
+```text
+Usuário ou senha inválidos
+```
+
+mas a resposta HTTP 429 passou corretamente a renderizar:
+
+```text
+Muitas tentativas de acesso
+```
+
+O teste foi atualizado para validar o comportamento novo. Não há migration nem
+alteração de banco nesta revisão.
 
 
 
