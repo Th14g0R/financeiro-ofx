@@ -412,15 +412,26 @@ def pluggy_sync_item(request, pk):
         item.save(update_fields=["last_error", "updated_at"])
         messages.error(request, f"Falha na sincronização: {exc}")
     else:
+        detail_parts = [
+            f"{result.accounts} conta(s)",
+            f"{result.transactions_created} nova(s) movimentação(ões)",
+            f"{result.transactions_existing} já existente(s)",
+            f"{result.pending_skipped} pendente(s) ignorada(s)",
+            f"{result.conflicts} divergência(s) para revisão",
+        ]
+        if result.banks_created:
+            detail_parts.append(f"{result.banks_created} banco(s) cadastrado(s) automaticamente")
+        if result.accounts_reclassified:
+            detail_parts.append(
+                f"{result.accounts_reclassified} conta(s) reclassificada(s) para o banco real"
+            )
+        if result.legacy_banks_removed:
+            detail_parts.append(
+                f"{result.legacy_banks_removed} cadastro(s) proxy antigo(s) removido(s)"
+            )
         messages.success(
             request,
-            (
-                f"Sincronização concluída: {result.accounts} conta(s), "
-                f"{result.transactions_created} nova(s) movimentação(ões), "
-                f"{result.transactions_existing} já existente(s), "
-                f"{result.pending_skipped} pendente(s) ignorada(s), "
-                f"{result.conflicts} divergência(s) para revisão."
-            ),
+            "Sincronização concluída: " + ", ".join(detail_parts) + ".",
         )
     return redirect("integrations:pluggy-overview")
 
@@ -461,7 +472,19 @@ def pluggy_map_account(request, pk):
         form = PluggyAccountMappingForm(request.POST)
         if form.is_valid():
             account.local_account = form.cleaned_data["local_account"]
-            account.save(update_fields=["local_account", "updated_at"])
+            # A escolha manual passa a ter precedência sobre a proveniência
+            # automática. Nunca marque uma conta selecionada pelo usuário como
+            # segura para exclusão automática pela integração.
+            account.local_account_created_by_pluggy = False
+            account.local_bank_created_by_pluggy = False
+            account.save(
+                update_fields=[
+                    "local_account",
+                    "local_account_created_by_pluggy",
+                    "local_bank_created_by_pluggy",
+                    "updated_at",
+                ]
+            )
             messages.success(request, "Vínculo da conta Pluggy atualizado.")
             return redirect("integrations:pluggy-overview")
     else:
@@ -502,6 +525,7 @@ def pluggy_cleanup_item(request, pk):
                 "links_deleted": result.links_deleted,
                 "internal_transfers_deleted": result.internal_transfers_deleted,
                 "local_accounts_deleted": result.local_accounts_deleted,
+                "local_banks_deleted": result.local_banks_deleted,
                 "item_removed": result.item_removed,
             }
 
@@ -519,7 +543,9 @@ def pluggy_cleanup_item(request, pk):
             if form.cleaned_data["delete_empty_local_accounts"]:
                 message += (
                     f" {result.local_accounts_deleted} conta(s) local(is) vazia(s) excluída(s); "
-                    f"{result.local_accounts_preserved} preservada(s) por segurança."
+                    f"{result.local_accounts_preserved} preservada(s) por segurança. "
+                    f"{result.local_banks_deleted} banco(s) cadastrado(s) automaticamente excluído(s); "
+                    f"{result.local_banks_preserved} preservado(s)."
                 )
             if result.item_removed:
                 message += " O Item também foi removido somente do Financeiro OFX."
@@ -588,6 +614,7 @@ def pluggy_cleanup_account(request, pk):
                 "links_deleted": result.links_deleted,
                 "internal_transfers_deleted": result.internal_transfers_deleted,
                 "local_accounts_deleted": result.local_accounts_deleted,
+                "local_banks_deleted": result.local_banks_deleted,
             }
 
             message = (
@@ -603,7 +630,9 @@ def pluggy_cleanup_account(request, pk):
             if form.cleaned_data["delete_empty_local_accounts"]:
                 message += (
                     f" {result.local_accounts_deleted} conta local vazia excluída; "
-                    f"{result.local_accounts_preserved} preservada(s) por segurança."
+                    f"{result.local_accounts_preserved} preservada(s) por segurança. "
+                    f"{result.local_banks_deleted} banco local cadastrado automaticamente excluído; "
+                    f"{result.local_banks_preserved} preservado(s)."
                 )
 
             messages.success(request, message)

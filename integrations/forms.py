@@ -435,8 +435,9 @@ class PluggyAccountMappingForm(forms.Form):
 class PluggyCleanupConfirmationForm(forms.Form):
     delete_empty_local_accounts = forms.BooleanField(
         label=(
-            "Excluir também as contas locais que ficarem vazias e não forem "
-            "utilizadas por OFX/PDF, outra integração ou outro Item Pluggy"
+            "Excluir também as contas locais e os bancos cadastrados automaticamente "
+            "pela Pluggy quando ficarem vazios e sem uso por OFX/PDF, outra integração "
+            "ou outro Item Pluggy"
         ),
         required=False,
         widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),

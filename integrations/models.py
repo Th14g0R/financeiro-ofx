@@ -343,6 +343,36 @@ class PluggyAccount(models.Model):
         default=dict,
         blank=True,
     )
+    detected_bank_name = models.CharField(
+        "Banco detectado",
+        max_length=120,
+        blank=True,
+        help_text=(
+            "Instituição financeira identificada a partir dos dados da conta. "
+            "No conector Meu Pluggy, é o banco real por trás do proxy."
+        ),
+    )
+    detected_bank_code = models.CharField(
+        "Código bancário detectado",
+        max_length=3,
+        blank=True,
+    )
+    local_account_created_by_pluggy = models.BooleanField(
+        "Conta local criada pela Pluggy",
+        default=False,
+        help_text=(
+            "Marca de proveniência usada para permitir limpeza segura de "
+            "contas criadas automaticamente pela integração."
+        ),
+    )
+    local_bank_created_by_pluggy = models.BooleanField(
+        "Banco local criado pela Pluggy",
+        default=False,
+        help_text=(
+            "Marca de proveniência usada para permitir limpeza segura de "
+            "bancos criados automaticamente pela integração."
+        ),
+    )
     is_active = models.BooleanField("Ativa", default=True, db_index=True)
     last_seen_at = models.DateTimeField(
         "Vista pela última vez",

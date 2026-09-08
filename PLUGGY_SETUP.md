@@ -167,16 +167,29 @@ A execução terminou; não está mais processando. Abra **Detalhes retornados p
 Pluggy** para identificar quais produtos foram atualizados e quais falharam.
 
 
+## Bancos reais retornados pelo Meu Pluggy
+
+O conector `Meu Pluggy (200)` é um proxy e **não deve ser cadastrado como banco** no
+Financeiro OFX. A partir da Etapa 10.9.5, a cópia identifica a instituição de cada conta
+retornada e relaciona a conta local diretamente ao banco real. Se o banco ainda não existir,
+é cadastrado automaticamente. Um COMPE `000` é tratado como placeholder e ignorado.
+
+Contas criadas por versões anteriores sob o banco `MeuPluggy` são migradas na próxima
+execução de **Copiar dados**: a mesma conta local é reclassificada para o banco real, logo
+as movimentações existentes continuam com os mesmos IDs e não são recriadas.
+
 ## Exclusão / rollback local de dados copiados
 
-A partir da Etapa 10.9.4, a tela **Open Finance / Meu Pluggy** permite excluir os dados
-copiados de um Item inteiro ou de uma única conta Pluggy. A exclusão atua somente no
-Financeiro OFX e nunca apaga o Item ou o consentimento no Pluggy Dashboard/Meu Pluggy.
+A partir da Etapa 10.9.5, a tela **Open Finance / Meu Pluggy** permite excluir os dados
+copiados de um Item inteiro ou de uma única conta Pluggy, incluindo opcionalmente contas
+e bancos locais que tenham sido cadastrados automaticamente pela integração. A exclusão
+atua somente no Financeiro OFX e nunca apaga o Item ou o consentimento no Pluggy Dashboard/Meu Pluggy.
 
 O sistema só apaga uma movimentação financeira quando a origem é comprovadamente Pluggy
 (`source_type=API`, `raw_data.provider=PLUGGY` e FITID gerado pelo importador Pluggy).
 Se um lançamento OFX/PDF/manual existente tiver sido apenas associado a um vínculo Pluggy,
-o lançamento é preservado. Contas locais só são removidas mediante opção explícita, quando há evidência de que foram
-criadas pela própria Pluggy e se ficarem vazias, sem importações, outras integrações ou outros vínculos Pluggy.
+o lançamento é preservado. Contas e bancos locais só são removidos mediante opção explícita
+e quando a proveniência Pluggy está comprovada, ficaram vazios e não possuem importações,
+outras integrações ou vínculos que precisem ser preservados.
 
 Toda exclusão exige a senha atual e a confirmação textual `EXCLUIR`.

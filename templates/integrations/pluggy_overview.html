@@ -36,6 +36,20 @@
     </div>
   </div>
 
+  <div class="alert alert-info">
+    <div class="fw-semibold mb-1">Bancos reais no Financeiro OFX</div>
+    <div>
+      O conector <strong>Meu Pluggy</strong> é apenas o canal de acesso. Ao copiar os dados,
+      o Financeiro identifica a instituição de cada conta e cadastra/vincula o banco real
+      separadamente (por exemplo, <strong>PicPay</strong> e <strong>RecargaPay</strong>).
+      <strong>MeuPluggy não deve aparecer como banco nos filtros financeiros.</strong>
+    </div>
+    <div class="small mt-2">
+      Contas criadas em versões anteriores sob o banco MeuPluggy serão reclassificadas
+      automaticamente na próxima cópia, sem recriar as movimentações.
+    </div>
+  </div>
+
   <div class="row g-3 mb-4">
     <div class="col-12 col-lg-4">
       <div class="card border-0 shadow-sm h-100">
@@ -196,7 +210,13 @@
           <form method="post" action="{% url 'integrations:pluggy-sync-item' item.pk %}" data-loading-form data-loading-text="Copiando dados...">
             {% csrf_token %}
             <button class="btn btn-sm btn-primary" type="submit" {% if item.status == "UPDATING" %}disabled{% endif %}>
-              {% if item.status == "UPDATING" %}Aguardando Pluggy{% else %}Copiar dados{% endif %}
+              {% if item.status == "UPDATING" %}
+                Aguardando Pluggy
+              {% elif item.connector_id == 200 %}
+                Copiar dados e organizar bancos
+              {% else %}
+                Copiar dados
+              {% endif %}
             </button>
           </form>
 
@@ -257,6 +277,9 @@
           <tr>
             <td>
               <div class="fw-semibold">{{ account.name|default:"Conta" }}</div>
+              {% if account.detected_bank_name %}
+                <div class="small text-primary">Banco detectado: <strong>{{ account.detected_bank_name }}</strong>{% if account.detected_bank_code %} · COMPE {{ account.detected_bank_code }}{% endif %}</div>
+              {% endif %}
               <div class="small text-secondary">{{ account.masked_number }} · {{ account.pluggy_account_id }}</div>
             </td>
             <td>{{ account.remote_type }} / {{ account.subtype }}</td>

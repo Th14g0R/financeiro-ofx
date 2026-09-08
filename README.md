@@ -1,5 +1,37 @@
-# Financeiro OFX — Etapa 10.9.4
+# Financeiro OFX — Etapa 10.9.5
 
+
+
+## Etapa 10.9.5 — Bancos reais do Meu Pluggy e limpeza completa
+
+O conector **Meu Pluggy (200)** passa a ser tratado como proxy de acesso, e não como
+um banco financeiro. Na cópia de dados:
+
+- cada conta retornada pelo Meu Pluggy é classificada pela instituição real subjacente;
+- exemplos já tratados: `PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)` →
+  **PicPay** e `RecargaPay (Conta Pré-paga)` → **RecargaPay**;
+- o banco real é localizado por COMPE válido quando disponível ou pelo nome detectado;
+- códigos placeholder como `000` deixam de ser usados como identidade bancária;
+- se o banco não existir, ele é cadastrado automaticamente;
+- contas criadas em versões anteriores dentro do banco `MeuPluggy` são reclassificadas
+  para o banco real sem recriar as movimentações;
+- um cadastro proxy antigo vazio é removido automaticamente quando há proveniência
+  suficiente para comprovar que foi criado pela integração;
+- a tela Open Finance mostra o **Banco detectado** por conta e o resultado da cópia
+  informa bancos criados/reclassificações realizadas.
+
+A limpeza Pluggy também foi ampliada:
+
+- contas e bancos criados automaticamente pela integração passam a ter marca explícita
+  de proveniência;
+- a migration faz backfill conservador dos registros criados pelas versões anteriores;
+- a prévia de exclusão mostra tanto contas quanto bancos candidatos;
+- ao marcar a opção de limpeza de cadastros vazios, bancos comprovadamente criados
+  pela Pluggy também podem ser excluídos depois que suas contas forem removidas;
+- bancos pré-existentes, bancos usados por OFX/PDF e cadastros sem proveniência segura
+  continuam protegidos.
+
+Esta revisão adiciona a migration `integrations.0003_pluggy_account_provenance`.
 
 
 ## Etapa 10.9.4 — Exclusão segura de dados copiados pela Pluggy

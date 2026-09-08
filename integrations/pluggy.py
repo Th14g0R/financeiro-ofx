@@ -55,7 +55,7 @@ def _request_json(
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Financeiro-OFX/10.9.4",
+        "User-Agent": "Financeiro-OFX/10.9.5",
     }
     if api_key:
         headers["X-API-KEY"] = api_key

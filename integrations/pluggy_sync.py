@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from django.db import transaction as db_transaction
+from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -16,7 +18,7 @@ from services.importing.staging import build_fingerprint
 from services.internal_transfers.matcher import analyze_internal_transfers
 
 from .models import PluggyAccount, PluggyConfiguration, PluggyItem, PluggyTransactionLink
-from .pluggy import list_accounts, list_all_transactions, retrieve_item
+from .pluggy import MEU_PLUGGY_CONNECTOR_ID, list_accounts, list_all_transactions, retrieve_item
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,11 +26,32 @@ class SyncResult:
     items: int = 0
     accounts: int = 0
     accounts_created: int = 0
+    banks_created: int = 0
+    accounts_reclassified: int = 0
+    legacy_banks_removed: int = 0
     transactions_seen: int = 0
     transactions_created: int = 0
     transactions_existing: int = 0
     pending_skipped: int = 0
     conflicts: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class AccountSyncResult:
+    accounts: tuple[PluggyAccount, ...]
+    local_accounts_created: int = 0
+    local_banks_created: int = 0
+    local_accounts_reclassified: int = 0
+    legacy_banks_removed: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class LocalAccountResolution:
+    account: Account
+    account_created: bool = False
+    bank_created: bool = False
+    account_reclassified: bool = False
+    legacy_bank_removed: bool = False
 
 
 def _dt(value: Any):
@@ -166,36 +189,206 @@ def _account_type(subtype: str) -> str:
     return Account.AccountType.OTHER
 
 
-def _find_or_create_local_account(
-    pluggy_account: PluggyAccount,
-    payload: dict[str, Any],
-) -> tuple[Account, bool]:
-    remote_id = pluggy_account.pluggy_account_id
-    ofx_id = f"PLUGGY:{remote_id}"
-    existing = Account.objects.filter(ofx_account_id=ofx_id).first()
-    if existing:
-        return existing, False
+def _normalized_bank_code(value: str) -> str:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if not digits:
+        return ""
+    code = digits[-3:].zfill(3)
+    # Meu Pluggy can expose 000 when the underlying institution does not
+    # provide a COMPE code. 000 is not useful as a bank identity and caused
+    # the old implementation to create a fake "MeuPluggy / 000" bank.
+    return "" if code == "000" else code
 
-    bank_name = pluggy_account.item.connector_name or "Pluggy / Open Finance"
+
+def _clean_proxy_institution_name(value: str) -> str:
+    raw = " ".join(str(value or "").split()).strip()
+    if not raw:
+        return ""
+
+    # Account labels returned through Meu Pluggy commonly carry the product
+    # subtype in parentheses, e.g. "RecargaPay (Conta Pré-paga)".
+    raw = re.sub(
+        r"\s*\((?:[^()]*(?:conta|cart[aã]o|poupan[cç]a|pré[- ]?paga|pre[- ]?paga)[^()]*)\)\s*$",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    # Keep the user-facing institution/brand and drop legal descriptions that
+    # are not useful in dashboard filters.
+    raw = re.sub(
+        r"\s+INSTITUI[CÇ][AÃ]O\s+DE\s+PAGAMENTO(?:\s+S\.?\s*A\.?)?.*$",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    normalized = re.sub(r"[^A-Z0-9]+", " ", raw.upper()).strip()
+    aliases = {
+        "PICPAY": "PicPay",
+        "RECARGAPAY": "RecargaPay",
+        "MERCADO PAGO": "Mercado Pago",
+        "NUBANK": "Nubank",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+
+    return raw[:120]
+
+
+def _bank_identity(item: PluggyItem, payload: dict[str, Any]) -> tuple[str, str]:
     bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
     transfer_number = str(bank_data.get("transferNumber") or "")
-    bank_code, branch, number, digit = _parse_transfer_number(transfer_number)
+    bank_code, _branch, _number, _digit = _parse_transfer_number(transfer_number)
+    bank_code = _normalized_bank_code(bank_code)
 
+    connector_name = " ".join(str(item.connector_name or "").split()).strip()
+    connector_upper = connector_name.upper()
+    is_proxy_connector = (
+        item.connector_id == MEU_PLUGGY_CONNECTOR_ID
+        or "SANDBOX OPEN FINANCE" in connector_upper
+    )
+
+    if is_proxy_connector:
+        account_label = str(
+            payload.get("marketingName")
+            or payload.get("name")
+            or ""
+        )
+        bank_name = _clean_proxy_institution_name(account_label)
+    else:
+        bank_name = connector_name
+
+    if not bank_name:
+        bank_name = _clean_proxy_institution_name(
+            str(payload.get("marketingName") or payload.get("name") or "")
+        )
+    if not bank_name:
+        bank_name = "Pluggy / Open Finance"
+
+    return bank_name[:120], bank_code
+
+
+def _legacy_account_was_created_by_pluggy(
+    pluggy_account: PluggyAccount,
+    local_account: Account,
+) -> bool:
+    expected_ofx_id = f"PLUGGY:{pluggy_account.pluggy_account_id}"
+    try:
+        created_near = abs(local_account.created_at - pluggy_account.created_at).total_seconds() <= 600
+    except (TypeError, AttributeError):
+        created_near = False
+    return local_account.ofx_account_id == expected_ofx_id and created_near
+
+
+def _bank_known_as_pluggy_created(bank: Bank) -> bool:
+    return PluggyAccount.objects.filter(
+        local_account__bank=bank,
+        local_bank_created_by_pluggy=True,
+    ).exists()
+
+
+def _get_or_create_bank(*, name: str, code: str) -> tuple[Bank, bool]:
     bank = None
-    if bank_code and bank_code.isdigit():
-        bank = Bank.objects.filter(code=bank_code.zfill(3)).first()
+    if code:
+        bank = Bank.objects.filter(code=code).first()
     if bank is None:
-        bank = Bank.objects.filter(name__iexact=bank_name).first()
+        bank = Bank.objects.filter(name__iexact=name).first()
+
+    created = False
     if bank is None:
-        kwargs = {"name": bank_name[:120], "is_active": True}
-        if bank_code and bank_code.isdigit() and not Bank.objects.filter(code=bank_code.zfill(3)).exists():
-            kwargs["code"] = bank_code.zfill(3)
+        kwargs = {"name": name[:120], "is_active": True}
+        if code and not Bank.objects.filter(code=code).exists():
+            kwargs["code"] = code
         bank = Bank.objects.create(**kwargs)
+        created = True
+    elif not bank.is_active:
+        bank.is_active = True
+        bank.save(update_fields=["is_active", "updated_at"])
+
+    return bank, created
+
+
+def _delete_empty_owned_legacy_bank(bank: Bank, *, owned: bool) -> bool:
+    if not owned:
+        return False
+    if bank.accounts.exists() or bank.import_statements.exists():
+        return False
+    try:
+        bank.delete()
+    except ProtectedError:
+        return False
+    return True
+
+
+def _resolve_local_account(
+    pluggy_account: PluggyAccount,
+    payload: dict[str, Any],
+) -> LocalAccountResolution:
+    remote_id = pluggy_account.pluggy_account_id
+    ofx_id = f"PLUGGY:{remote_id}"
+    bank_name, bank_code = _bank_identity(pluggy_account.item, payload)
+    pluggy_account.detected_bank_name = bank_name
+    pluggy_account.detected_bank_code = bank_code
+
+    bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
+    transfer_number = str(bank_data.get("transferNumber") or "")
+    _raw_code, branch, number, digit = _parse_transfer_number(transfer_number)
+
+    current = pluggy_account.local_account
+    if current is None:
+        current = Account.objects.filter(ofx_account_id=ofx_id).select_related("bank").first()
+
+    if current is not None:
+        owned_account = (
+            pluggy_account.local_account_created_by_pluggy
+            or _legacy_account_was_created_by_pluggy(pluggy_account, current)
+        )
+        old_bank = current.bank
+        old_bank_owned = (
+            pluggy_account.local_bank_created_by_pluggy
+            or _bank_known_as_pluggy_created(old_bank)
+        )
+
+        reclassified = False
+        bank_created = False
+        legacy_bank_removed = False
+        if owned_account:
+            target_bank, bank_created = _get_or_create_bank(name=bank_name, code=bank_code)
+            if current.bank_id != target_bank.pk:
+                current.bank = target_bank
+                current.is_active = True
+                current.save(update_fields=["bank", "is_active", "updated_at"])
+                reclassified = True
+                legacy_bank_removed = _delete_empty_owned_legacy_bank(
+                    old_bank,
+                    owned=old_bank_owned,
+                )
+            elif not current.is_active:
+                current.is_active = True
+                current.save(update_fields=["is_active", "updated_at"])
+
+            pluggy_account.local_account_created_by_pluggy = True
+            pluggy_account.local_bank_created_by_pluggy = (
+                bank_created
+                or _bank_known_as_pluggy_created(target_bank)
+                or (current.bank_id == old_bank.pk and old_bank_owned)
+            )
+
+        return LocalAccountResolution(
+            account=current,
+            account_created=False,
+            bank_created=bank_created,
+            account_reclassified=reclassified,
+            legacy_bank_removed=legacy_bank_removed,
+        )
+
+    target_bank, bank_created = _get_or_create_bank(name=bank_name, code=bank_code)
 
     if number:
         matched = list(
             Account.objects.filter(
-                bank=bank,
+                bank=target_bank,
                 branch=branch,
                 number=number,
                 digit=digit,
@@ -206,7 +399,12 @@ def _find_or_create_local_account(
             if not account.ofx_account_id:
                 account.ofx_account_id = ofx_id
                 account.save(update_fields=["ofx_account_id", "updated_at"])
-            return account, False
+            # This is a pre-existing account recognized by banking coordinates;
+            # it is linked but not marked as integration-owned.
+            return LocalAccountResolution(
+                account=account,
+                bank_created=bank_created,
+            )
 
     account_number = number or f"PLUGGY-{remote_id[:12]}"
     nickname = (
@@ -215,7 +413,7 @@ def _find_or_create_local_account(
         or bank_name[:120]
     )
     account = Account.objects.create(
-        bank=bank,
+        bank=target_bank,
         nickname=nickname,
         branch=branch,
         number=account_number[:40],
@@ -226,46 +424,84 @@ def _find_or_create_local_account(
         is_own_account=True,
         is_active=True,
     )
-    return account, True
+    pluggy_account.local_account_created_by_pluggy = True
+    pluggy_account.local_bank_created_by_pluggy = (
+        bank_created or _bank_known_as_pluggy_created(target_bank)
+    )
+    return LocalAccountResolution(
+        account=account,
+        account_created=True,
+        bank_created=bank_created,
+    )
+
+
+def sync_accounts(item: PluggyItem) -> AccountSyncResult:
+    payloads = list_accounts(item.configuration, item.item_id)
+    now = timezone.now()
+    result: list[PluggyAccount] = []
+    created_local = 0
+    created_banks = 0
+    reclassified_accounts = 0
+    legacy_banks_removed = 0
+    seen_ids: set[str] = set()
+
+    with db_transaction.atomic():
+        for payload in payloads:
+            remote_id = str(payload.get("id") or "").strip()
+            if not remote_id:
+                continue
+            seen_ids.add(remote_id)
+            bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
+            account, _ = PluggyAccount.objects.update_or_create(
+                pluggy_account_id=remote_id,
+                defaults={
+                    "item": item,
+                    "remote_type": str(payload.get("type") or "")[:20],
+                    "subtype": str(payload.get("subtype") or "")[:60],
+                    "name": str(payload.get("marketingName") or payload.get("name") or "")[:180],
+                    "masked_number": str(payload.get("number") or "")[:120],
+                    "currency": str(payload.get("currencyCode") or "BRL")[:3].upper(),
+                    "balance": _decimal(payload.get("balance")),
+                    "bank_data": bank_data,
+                    "is_active": True,
+                    "last_seen_at": now,
+                },
+            )
+            if account.remote_type == "BANK":
+                resolution = _resolve_local_account(account, payload)
+                account.local_account = resolution.account
+                account.save(
+                    update_fields=[
+                        "local_account",
+                        "detected_bank_name",
+                        "detected_bank_code",
+                        "local_account_created_by_pluggy",
+                        "local_bank_created_by_pluggy",
+                        "updated_at",
+                    ]
+                )
+                created_local += int(resolution.account_created)
+                created_banks += int(resolution.bank_created)
+                reclassified_accounts += int(resolution.account_reclassified)
+                legacy_banks_removed += int(resolution.legacy_bank_removed)
+            result.append(account)
+
+        if seen_ids:
+            item.accounts.exclude(pluggy_account_id__in=seen_ids).update(is_active=False)
+
+    return AccountSyncResult(
+        accounts=tuple(result),
+        local_accounts_created=created_local,
+        local_banks_created=created_banks,
+        local_accounts_reclassified=reclassified_accounts,
+        legacy_banks_removed=legacy_banks_removed,
+    )
 
 
 def upsert_accounts(item: PluggyItem) -> tuple[list[PluggyAccount], int]:
-    payloads = list_accounts(item.configuration, item.item_id)
-    now = timezone.now()
-    result = []
-    created_local = 0
-    seen_ids = set()
-    for payload in payloads:
-        remote_id = str(payload.get("id") or "").strip()
-        if not remote_id:
-            continue
-        seen_ids.add(remote_id)
-        bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
-        account, _ = PluggyAccount.objects.update_or_create(
-            pluggy_account_id=remote_id,
-            defaults={
-                "item": item,
-                "remote_type": str(payload.get("type") or "")[:20],
-                "subtype": str(payload.get("subtype") or "")[:60],
-                "name": str(payload.get("marketingName") or payload.get("name") or "")[:180],
-                "masked_number": str(payload.get("number") or "")[:120],
-                "currency": str(payload.get("currencyCode") or "BRL")[:3].upper(),
-                "balance": _decimal(payload.get("balance")),
-                "bank_data": bank_data,
-                "is_active": True,
-                "last_seen_at": now,
-            },
-        )
-        if account.remote_type == "BANK" and account.local_account_id is None:
-            local_account, was_created = _find_or_create_local_account(account, payload)
-            account.local_account = local_account
-            account.save(update_fields=["local_account", "updated_at"])
-            created_local += int(was_created)
-        result.append(account)
-
-    if seen_ids:
-        item.accounts.exclude(pluggy_account_id__in=seen_ids).update(is_active=False)
-    return result, created_local
+    """Backward-compatible wrapper used by existing tests and callers."""
+    result = sync_accounts(item)
+    return list(result.accounts), result.local_accounts_created
 
 
 def _transaction_type(description: str, category: str = "") -> str:
@@ -479,9 +715,9 @@ def sync_account_transactions(
 
 def sync_item(item: PluggyItem, *, user=None) -> SyncResult:
     item = refresh_item(item)
-    accounts, created_local = upsert_accounts(item)
+    account_result = sync_accounts(item)
     totals = {"seen": 0, "created": 0, "existing": 0, "pending": 0, "conflicts": 0}
-    for account in accounts:
+    for account in account_result.accounts:
         stats = sync_account_transactions(account, user=user)
         for key in totals:
             totals[key] += stats[key]
@@ -490,8 +726,11 @@ def sync_item(item: PluggyItem, *, user=None) -> SyncResult:
     item.save(update_fields=["last_sync_at", "last_error", "updated_at"])
     return SyncResult(
         items=1,
-        accounts=len(accounts),
-        accounts_created=created_local,
+        accounts=len(account_result.accounts),
+        accounts_created=account_result.local_accounts_created,
+        banks_created=account_result.local_banks_created,
+        accounts_reclassified=account_result.local_accounts_reclassified,
+        legacy_banks_removed=account_result.legacy_banks_removed,
         transactions_seen=totals["seen"],
         transactions_created=totals["created"],
         transactions_existing=totals["existing"],

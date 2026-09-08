@@ -8,7 +8,7 @@ from django.db import transaction as db_transaction
 from django.db.models import Q
 from django.db.models.deletion import ProtectedError
 
-from finance.models import Account, InternalTransfer, Transaction
+from finance.models import Account, Bank, InternalTransfer, Transaction
 
 from .models import PluggyAccount, PluggyItem, PluggyTransactionLink
 
@@ -16,6 +16,14 @@ from .models import PluggyAccount, PluggyItem, PluggyTransactionLink
 @dataclass(frozen=True, slots=True)
 class AccountCleanupCandidate:
     account_id: int
+    label: str
+    can_delete: bool
+    reasons: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class BankCleanupCandidate:
+    bank_id: int
     label: str
     can_delete: bool
     reasons: tuple[str, ...] = ()
@@ -30,6 +38,7 @@ class PluggyCleanupPreview:
     transactions_preserved: int
     internal_transfers_to_delete: int
     local_accounts: tuple[AccountCleanupCandidate, ...]
+    local_banks: tuple[BankCleanupCandidate, ...]
 
     @property
     def deletable_local_accounts(self) -> int:
@@ -38,6 +47,14 @@ class PluggyCleanupPreview:
     @property
     def blocked_local_accounts(self) -> int:
         return sum(1 for account in self.local_accounts if not account.can_delete)
+
+    @property
+    def deletable_local_banks(self) -> int:
+        return sum(1 for bank in self.local_banks if bank.can_delete)
+
+    @property
+    def blocked_local_banks(self) -> int:
+        return sum(1 for bank in self.local_banks if not bank.can_delete)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +65,8 @@ class PluggyCleanupResult:
     internal_transfers_deleted: int
     local_accounts_deleted: int
     local_accounts_preserved: int
+    local_banks_deleted: int
+    local_banks_preserved: int
     item_removed: bool
 
 
@@ -129,6 +148,18 @@ def _account_label(account: Account) -> str:
     )
 
 
+def _legacy_account_creation_signature(
+    pluggy_account: PluggyAccount,
+    local_account: Account,
+) -> bool:
+    expected_ofx_id = f"PLUGGY:{pluggy_account.pluggy_account_id}"
+    try:
+        created_near = abs(local_account.created_at - pluggy_account.created_at) <= timedelta(minutes=10)
+    except (TypeError, AttributeError):
+        created_near = False
+    return local_account.ofx_account_id == expected_ofx_id and created_near
+
+
 def _local_account_candidates(
     *,
     scope_accounts: list[PluggyAccount],
@@ -155,17 +186,10 @@ def _local_account_candidates(
             for account in scope_accounts
             if account.local_account_id == local_account.pk
         ]
-        expected_ofx_ids = {
-            f"PLUGGY:{account.pluggy_account_id}"
+        has_pluggy_creation_signature = any(
+            account.local_account_created_by_pluggy
+            or _legacy_account_creation_signature(account, local_account)
             for account in related_scope_accounts
-        }
-        created_near_pluggy_account = any(
-            abs(local_account.created_at - account.created_at) <= timedelta(minutes=1)
-            for account in related_scope_accounts
-        )
-        has_pluggy_creation_signature = (
-            local_account.ofx_account_id in expected_ofx_ids
-            and created_near_pluggy_account
         )
 
         if not has_pluggy_creation_signature:
@@ -195,6 +219,84 @@ def _local_account_candidates(
             AccountCleanupCandidate(
                 account_id=local_account.pk,
                 label=_account_label(local_account),
+                can_delete=not reasons,
+                reasons=tuple(reasons),
+            )
+        )
+
+    return tuple(candidates)
+
+
+def _local_bank_candidates(
+    *,
+    scope_accounts: list[PluggyAccount],
+    account_candidates: tuple[AccountCleanupCandidate, ...],
+) -> tuple[BankCleanupCandidate, ...]:
+    local_accounts = {
+        account.local_account_id: account.local_account
+        for account in scope_accounts
+        if account.local_account_id and account.local_account is not None
+    }
+    bank_ids = {account.bank_id for account in local_accounts.values()}
+    deletable_account_ids = {
+        candidate.account_id
+        for candidate in account_candidates
+        if candidate.can_delete
+    }
+
+    candidates: list[BankCleanupCandidate] = []
+    for bank in Bank.objects.filter(pk__in=bank_ids).order_by("name", "id"):
+        reasons: list[str] = []
+        related_scope_accounts = [
+            account
+            for account in scope_accounts
+            if account.local_account_id
+            and account.local_account is not None
+            and account.local_account.bank_id == bank.pk
+        ]
+        has_pluggy_creation_signature = any(
+            account.local_bank_created_by_pluggy
+            for account in related_scope_accounts
+        )
+
+        # Compatibility with records created by 10.9.4 before provenance flags
+        # existed. This fallback only accepts a bank when all its local accounts
+        # are themselves safe Pluggy-created candidates and were created near it.
+        if not has_pluggy_creation_signature:
+            bank_account_ids = set(bank.accounts.values_list("id", flat=True))
+            related_ids = {
+                account.local_account_id
+                for account in related_scope_accounts
+                if account.local_account_id
+            }
+            legacy_near = bool(related_scope_accounts) and all(
+                abs(bank.created_at - account.local_account.created_at) <= timedelta(minutes=10)
+                for account in related_scope_accounts
+                if account.local_account is not None
+            )
+            has_pluggy_creation_signature = (
+                bool(bank_account_ids)
+                and bank_account_ids == related_ids
+                and bank_account_ids.issubset(deletable_account_ids)
+                and legacy_near
+                and not bank.import_statements.exists()
+            )
+
+        if not has_pluggy_creation_signature:
+            reasons.append(
+                "não há evidência suficiente de que o banco foi cadastrado automaticamente pela Pluggy"
+            )
+
+        if bank.accounts.exclude(pk__in=deletable_account_ids).exists():
+            reasons.append("possui outras contas que serão preservadas")
+
+        if bank.import_statements.exists():
+            reasons.append("é utilizado por importação OFX/PDF")
+
+        candidates.append(
+            BankCleanupCandidate(
+                bank_id=bank.pk,
+                label=bank.name,
                 can_delete=not reasons,
                 reasons=tuple(reasons),
             )
@@ -245,6 +347,15 @@ def build_cleanup_preview(
             f"{pluggy_account.name or pluggy_account.masked_number or pluggy_account.pluggy_account_id}"
         )
 
+    account_candidates = _local_account_candidates(
+        scope_accounts=scope_accounts,
+        transaction_delete_ids=delete_ids,
+    )
+    bank_candidates = _local_bank_candidates(
+        scope_accounts=scope_accounts,
+        account_candidates=account_candidates,
+    )
+
     return PluggyCleanupPreview(
         scope_label=scope_label,
         pluggy_accounts=len(scope_accounts),
@@ -252,10 +363,8 @@ def build_cleanup_preview(
         transactions_to_delete=len(delete_ids),
         transactions_preserved=len(preserve_ids),
         internal_transfers_to_delete=internal_transfer_count,
-        local_accounts=_local_account_candidates(
-            scope_accounts=scope_accounts,
-            transaction_delete_ids=delete_ids,
-        ),
+        local_accounts=account_candidates,
+        local_banks=bank_candidates,
     )
 
 
@@ -309,6 +418,10 @@ def cleanup_pluggy_data(
     account_candidates = _local_account_candidates(
         scope_accounts=scope_accounts,
         transaction_delete_ids=transaction_delete_ids,
+    )
+    bank_candidates = _local_bank_candidates(
+        scope_accounts=scope_accounts,
+        account_candidates=account_candidates,
     )
 
     internal_transfer_count = 0
@@ -365,6 +478,34 @@ def cleanup_pluggy_data(
             else:
                 deleted_local_accounts += 1
 
+    deleted_local_banks = 0
+    preserved_local_banks = len(bank_candidates)
+
+    if delete_empty_local_accounts:
+        preserved_local_banks = 0
+        for candidate in bank_candidates:
+            if not candidate.can_delete:
+                preserved_local_banks += 1
+                continue
+
+            try:
+                bank = Bank.objects.select_for_update().get(pk=candidate.bank_id)
+            except Bank.DoesNotExist:
+                continue
+
+            # Banks are deleted only after the candidate local accounts have
+            # been removed. Re-check that no account/import now references it.
+            if bank.accounts.exists() or bank.import_statements.exists():
+                preserved_local_banks += 1
+                continue
+
+            try:
+                bank.delete()
+            except ProtectedError:
+                preserved_local_banks += 1
+            else:
+                deleted_local_banks += 1
+
     item_removed = False
     if remove_item:
         item.delete()
@@ -383,5 +524,7 @@ def cleanup_pluggy_data(
         internal_transfers_deleted=internal_transfer_count,
         local_accounts_deleted=deleted_local_accounts,
         local_accounts_preserved=preserved_local_accounts,
+        local_banks_deleted=deleted_local_banks,
+        local_banks_preserved=preserved_local_banks,
         item_removed=item_removed,
     )

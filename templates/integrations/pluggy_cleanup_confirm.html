@@ -94,6 +94,41 @@
   </div>
   {% endif %}
 
+  {% if preview.local_banks %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white fw-semibold">Bancos locais relacionados</div>
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Banco local</th>
+            <th>Situação para exclusão do banco</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for bank in preview.local_banks %}
+          <tr>
+            <td>{{ bank.label }}</td>
+            <td>
+              {% if bank.can_delete %}
+                <span class="badge text-bg-success">Pode ser excluído após remover as contas vazias</span>
+              {% else %}
+                <span class="badge text-bg-secondary">Será preservado</span>
+                <div class="small text-secondary mt-1">
+                  {% for reason in bank.reasons %}
+                    {% if not forloop.first %} · {% endif %}{{ reason }}
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
   <div class="card border-danger shadow-sm">
     <div class="card-header bg-danger-subtle text-danger fw-semibold">Confirmar exclusão</div>
     <div class="card-body">
@@ -156,7 +191,8 @@
   </div>
 
   <div class="small text-secondary mt-3">
-    Bancos e contrapartes eventualmente já existentes no cadastro são preservados por segurança.
+    Bancos já existentes antes da integração e contrapartes são preservados por segurança.
+    Bancos comprovadamente cadastrados automaticamente pela Pluggy podem ser removidos quando ficarem vazios.
     A operação também não envia DELETE/PATCH para a Pluggy.
   </div>
 </div>

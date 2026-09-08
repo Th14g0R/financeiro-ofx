@@ -712,6 +712,7 @@ class PluggyCleanupTests(TestCase):
 
         item_pk = self.item.pk
         account_pk = self.local.pk
+        bank_pk = self.bank.pk
         result = cleanup_pluggy_data(
             item_pk=item_pk,
             delete_empty_local_accounts=True,
@@ -720,8 +721,10 @@ class PluggyCleanupTests(TestCase):
 
         self.assertEqual(result.transactions_deleted, 1)
         self.assertEqual(result.local_accounts_deleted, 1)
+        self.assertEqual(result.local_banks_deleted, 1)
         self.assertTrue(result.item_removed)
         self.assertFalse(Account.objects.filter(pk=account_pk).exists())
+        self.assertFalse(Bank.objects.filter(pk=bank_pk).exists())
         self.assertFalse(PluggyItem.objects.filter(pk=item_pk).exists())
 
     def test_cleanup_preserves_local_account_when_non_pluggy_data_exists(self):
@@ -792,3 +795,125 @@ class PluggyCleanupTests(TestCase):
         )
         self.assertEqual(response.status_code, 302)
         self.assertFalse(Transaction.objects.filter(pk=pluggy_tx.pk).exists())
+
+
+class PluggyUnderlyingBankClassificationTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="pluggy-bank-classifier",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.config = PluggyConfiguration(name="Pluggy Bancos", client_id="client-banks")
+        self.config.set_client_secret("secret-banks")
+        self.config.save()
+        self.item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id="91919191-9191-9191-9191-919191919191",
+            connector_id=200,
+            connector_name="MeuPluggy",
+            status="UPDATED",
+            created_by=self.user,
+        )
+
+    @patch("integrations.pluggy_sync.list_accounts")
+    def test_meu_pluggy_creates_bank_from_underlying_institution(self, mocked):
+        mocked.return_value = [
+            {
+                "id": "92929292-9292-9292-9292-929292929292",
+                "type": "BANK",
+                "subtype": "CHECKING_ACCOUNT",
+                "number": "08614777-3",
+                "name": "PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)",
+                "marketingName": "PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)",
+                "balance": 0.42,
+                "currencyCode": "BRL",
+                "bankData": {},
+            },
+            {
+                "id": "93939393-9393-9393-9393-939393939393",
+                "type": "BANK",
+                "subtype": "CHECKING_ACCOUNT",
+                "number": "634385454-2",
+                "name": "RecargaPay (Conta Pré-paga)",
+                "marketingName": "RecargaPay (Conta Pré-paga)",
+                "balance": 0,
+                "currencyCode": "BRL",
+                "bankData": {},
+            },
+        ]
+
+        accounts, created = upsert_accounts(self.item)
+
+        self.assertEqual(created, 2)
+        self.assertEqual({account.detected_bank_name for account in accounts}, {"PicPay", "RecargaPay"})
+        self.assertEqual(
+            {account.local_account.bank.name for account in accounts},
+            {"PicPay", "RecargaPay"},
+        )
+        self.assertFalse(Bank.objects.filter(name__iexact="MeuPluggy").exists())
+        self.assertTrue(all(account.local_account_created_by_pluggy for account in accounts))
+        self.assertTrue(all(account.local_bank_created_by_pluggy for account in accounts))
+
+    @patch("integrations.pluggy_sync.list_accounts")
+    def test_legacy_meupluggy_bank_is_reclassified_without_recreating_transaction(self, mocked):
+        legacy_bank = Bank.objects.create(name="MeuPluggy", code="000")
+        remote_id = "94949494-9494-9494-9494-949494949494"
+        legacy_account = Account.objects.create(
+            bank=legacy_bank,
+            nickname="PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)",
+            number=f"PLUGGY-{remote_id[:12]}",
+            account_type=Account.AccountType.CHECKING,
+            currency="BRL",
+            ofx_account_id=f"PLUGGY:{remote_id}",
+            is_own_account=True,
+        )
+        remote = PluggyAccount.objects.create(
+            item=self.item,
+            pluggy_account_id=remote_id,
+            local_account=legacy_account,
+            remote_type="BANK",
+            subtype="CHECKING_ACCOUNT",
+            name="PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)",
+            currency="BRL",
+            local_account_created_by_pluggy=True,
+            local_bank_created_by_pluggy=True,
+        )
+        tx = Transaction.objects.create(
+            account=legacy_account,
+            posted_at=timezone.now(),
+            competence_date=timezone.localdate(),
+            amount="10.00",
+            direction=Transaction.Direction.CREDIT,
+            transaction_type=Transaction.TransactionType.PIX,
+            source_type=Transaction.SourceType.API,
+            fitid="PLUGGY:legacy-reclassify",
+            raw_description="PIX TESTE",
+            normalized_description="PIX TESTE",
+            fingerprint="e" * 64,
+            raw_data={"provider": "PLUGGY"},
+            created_by=self.user,
+        )
+        mocked.return_value = [
+            {
+                "id": remote_id,
+                "type": "BANK",
+                "subtype": "CHECKING_ACCOUNT",
+                "number": "08614777-3",
+                "name": "PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)",
+                "marketingName": "PICPAY INSTITUIÇÃO DE PAGAMENTO S.A (Conta Pré-paga)",
+                "balance": 0.42,
+                "currencyCode": "BRL",
+                "bankData": {},
+            }
+        ]
+
+        accounts, created = upsert_accounts(self.item)
+
+        self.assertEqual(created, 0)
+        remote.refresh_from_db()
+        legacy_account.refresh_from_db()
+        tx.refresh_from_db()
+        self.assertEqual(remote.local_account_id, legacy_account.pk)
+        self.assertEqual(legacy_account.bank.name, "PicPay")
+        self.assertEqual(tx.account_id, legacy_account.pk)
+        self.assertFalse(Bank.objects.filter(pk=legacy_bank.pk).exists())
