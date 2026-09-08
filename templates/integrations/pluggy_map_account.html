@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}Pluggy | Vincular conta{% endblock %}
+{% block content %}
+<div class="container py-4"><h1 class="h3 mb-1">Vincular conta Pluggy</h1><p class="text-secondary">{{ account.item.connector_name }} · {{ account.name }} · {{ account.masked_number }}</p>
+<div class="card border-0 shadow-sm"><div class="card-body"><form method="post">{% csrf_token %}<label class="form-label">{{ form.local_account.label }}</label>{{ form.local_account }}<div class="form-text">Deixe em branco para permitir que a sincronização crie/vincule automaticamente uma conta local identificada por PLUGGY:&lt;account-id&gt;.</div><div class="mt-3 d-flex gap-2"><button class="btn btn-primary">Salvar vínculo</button><a class="btn btn-outline-secondary" href="{% url 'integrations:pluggy-overview' %}">Cancelar</a></div></form></div></div></div>
+{% endblock %}

@@ -1,4 +1,79 @@
-# Financeiro OFX — Etapa 10.8.2
+# Financeiro OFX — Etapa 10.9.4
+
+
+
+## Etapa 10.9.4 — Exclusão segura de dados copiados pela Pluggy
+
+Foi adicionado rollback local por Item ou por conta Pluggy, com foco em remover com segurança
+os dados de Sandbox e permitir testes controlados antes do uso definitivo com contas reais:
+
+- botão **Excluir dados copiados** no Item e **Excluir dados** em cada conta Pluggy;
+- prévia obrigatória com quantidade de vínculos, movimentações a excluir, movimentações
+  preservadas e transferências internas afetadas;
+- somente movimentações com proveniência comprovada `API + raw_data.provider=PLUGGY + FITID Pluggy`
+  podem ser apagadas; lançamentos OFX/PDF/manuais apenas vinculados pela deduplicação são preservados;
+- exclusões são executadas em `transaction.atomic()` e revalidam as condições imediatamente antes
+  de excluir contas locais;
+- opção separada para excluir contas locais identificadas como criadas pela Pluggy e que fiquem vazias,
+  bloqueada quando a conta possui outros dados,
+  importações, outra integração ou outro vínculo Pluggy;
+- opção de remover o Item somente do Financeiro OFX, sem apagar a conexão no Pluggy Dashboard;
+- confirmação destrutiva exige digitar `EXCLUIR` e informar a senha atual do usuário;
+- a operação registra contagens na auditoria e não executa `DELETE`/`PATCH` na API Pluggy.
+
+Não há migration nova nesta revisão.
+
+
+## Etapa 10.9.3 — Meu Pluggy: dados reais e status de sincronização
+
+A interface Open Finance foi ajustada para refletir o fluxo oficial do Meu Pluggy:
+
+- `Sandbox Open Finance` passa a ser identificado explicitamente como dados fictícios;
+- o fluxo de dados reais orienta `Development > Demo > Conectar Conta > Meu Pluggy`;
+- Items do Connector 200 são identificados como `Meu Pluggy · dados reais`;
+- `status`, `executionStatus`, última atualização Pluggy e última cópia local ficam visíveis;
+- `statusDetail` e `executionReport` deixam de ser descartados e podem ser consultados,
+  especialmente em `PARTIAL_SUCCESS`;
+- o botão de atualização direta do banco foi removido do fluxo normal para evitar `PATCH`
+  repetido e a limitação de frequência da Development Application;
+- o menu principal `Integrações` foi substituído por `Open Finance`, apontando direto para
+  a tela Pluggy; o código legado de integração direta permanece apenas para compatibilidade;
+- botões de operações demoradas exibem estado `Processando...` até a resposta do servidor.
+
+Não há migration nova nesta revisão.
+
+## Etapa 10.9.2 — Meu Pluggy: fluxo pessoal por Item ID
+
+A integração foi ajustada para separar o fluxo pessoal de uma Development
+Application do uso opcional do Pluggy Connect embutido:
+
+- o fluxo padrão passa a orientar `Pluggy Dashboard > Ir para Demo`;
+- o usuário autoriza o Meu Pluggy no ambiente Demo, copia o `Item ID` e o
+  registra no Financeiro;
+- o backend valida o Item com `GET /items/<itemId>` antes de persistir;
+- a sincronização continua somente por leitura: `GET /items`, `GET /accounts`
+  e `GET /v2/transactions`;
+- Connector 200 continua sem atualização forçada via `PATCH /items/<id>`;
+- o Pluggy Connect embutido permanece disponível como opção explícita através
+  de `PLUGGY_EMBEDDED_CONNECT_ENABLED=True`;
+- com o widget desativado, os domínios externos Pluggy deixam de ser liberados
+  na CSP da tela, reduzindo a superfície de segurança;
+- Client Secret/API Key continuam exclusivamente no servidor.
+
+Não há migration nova nesta revisão. A estrutura criada em
+`integrations.0002_pluggy` permanece válida.
+## Etapa 10.9 — Pluggy / Open Finance
+
+Integração híbrida adicionada: a Pluggy passa a ser o canal preferencial para
+Open Finance e agregação multibanco, mantendo OFX/PDF como fallback.
+
+A versão inclui configuração segura de Client ID/Client Secret, autenticação
+server-side, descoberta/registro de Items, consulta de contas BANK, sincronização
+de `GET /v2/transactions` por cursor, deduplicação por `providerId`/transaction
+ID, proteção de transações `PENDING`, associação automática de contas e
+bloqueio de sobrescrita silenciosa quando a Pluggy divergir de um lançamento já
+gravado. Consulte `PLUGGY_SETUP.md`.
+
 
 
 

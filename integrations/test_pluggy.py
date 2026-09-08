@@ -1,0 +1,794 @@
+from __future__ import annotations
+
+from datetime import timedelta
+from unittest.mock import patch
+
+from django.contrib.auth import get_user_model
+from django.test import TestCase, override_settings
+from django.utils import timezone
+
+from finance.models import Account, Bank, Transaction
+
+from .forms import PluggyConfigurationForm
+from .models import PluggyAccount, PluggyConfiguration, PluggyItem, PluggyTransactionLink
+from .pluggy import authenticate
+from .pluggy_sync import sync_account_transactions, upsert_accounts, upsert_item
+
+
+class PluggyConfigurationTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="pluggy-admin",
+            password="Senha-Muito-Forte-123!",
+        )
+
+    @override_settings(DEBUG=False)
+    def test_form_encrypts_client_secret_and_never_stores_plaintext(self):
+        form = PluggyConfigurationForm(
+            data={
+                "name": "Pluggy / Open Finance",
+                "client_id": "client-id-test",
+                "client_secret": "client-secret-ultra-reservado",
+                "current_password": "Senha-Muito-Forte-123!",
+                "is_active": "on",
+            },
+            user=self.user,
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+        config = form.save()
+        self.assertNotIn("client-secret-ultra-reservado", config.client_secret_encrypted)
+        self.assertEqual(config.get_client_secret(), "client-secret-ultra-reservado")
+
+    def test_auth_caches_short_lived_api_key_encrypted(self):
+        config = PluggyConfiguration(name="Pluggy", client_id="client")
+        config.set_client_secret("secret")
+        config.save()
+        with patch("integrations.pluggy._request_json", return_value={"accessToken": "temporary-api-key"}) as mocked:
+            first = authenticate(config, force=True)
+            second = authenticate(config)
+        self.assertEqual(first, "temporary-api-key")
+        self.assertEqual(second, "temporary-api-key")
+        self.assertEqual(mocked.call_count, 1)
+        config.refresh_from_db()
+        self.assertNotIn("temporary-api-key", config.api_key_encrypted)
+        self.assertGreater(config.api_key_expires_at, timezone.now() + timedelta(hours=1))
+
+
+class PluggySyncTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(username="operator", password="Senha-Muito-Forte-123!")
+        self.config = PluggyConfiguration(name="Pluggy", client_id="client")
+        self.config.set_client_secret("secret")
+        self.config.save()
+        self.item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id="11111111-1111-1111-1111-111111111111",
+            connector_name="Nubank",
+            status="UPDATED",
+        )
+        self.bank = Bank.objects.create(name="Nubank")
+        self.local = Account.objects.create(
+            bank=self.bank,
+            nickname="Nubank Principal",
+            branch="0001",
+            number="12345",
+            digit="6",
+            account_type=Account.AccountType.CHECKING,
+            currency="BRL",
+            is_own_account=True,
+        )
+        self.remote = PluggyAccount.objects.create(
+            item=self.item,
+            pluggy_account_id="22222222-2222-2222-2222-222222222222",
+            local_account=self.local,
+            remote_type="BANK",
+            subtype="CHECKING_ACCOUNT",
+            name="Conta Corrente",
+            currency="BRL",
+        )
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_posted_transaction_is_created_once_using_provider_id(self, mocked):
+        mocked.return_value = [{
+            "id": "33333333-3333-3333-3333-333333333333",
+            "providerId": "provider-xyz-1",
+            "date": "2026-09-08T12:00:00.000Z",
+            "description": "Pix recebido de Maria Silva",
+            "amount": 150.25,
+            "type": "CREDIT",
+            "status": "POSTED",
+            "currencyCode": "BRL",
+        }]
+        first = sync_account_transactions(self.remote, user=self.user)
+        second = sync_account_transactions(self.remote, user=self.user)
+        self.assertEqual(first["created"], 1)
+        self.assertEqual(second["created"], 0)
+        self.assertEqual(Transaction.objects.count(), 1)
+        tx = Transaction.objects.get()
+        self.assertEqual(tx.fitid, "PLUGGY-PROVIDER:provider-xyz-1")
+        self.assertEqual(tx.source_type, Transaction.SourceType.API)
+        self.assertEqual(tx.created_by, self.user)
+        self.assertEqual(PluggyTransactionLink.objects.count(), 1)
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_pending_transaction_is_not_written(self, mocked):
+        mocked.return_value = [{
+            "id": "44444444-4444-4444-4444-444444444444",
+            "date": "2026-09-08T12:00:00.000Z",
+            "description": "Compra pendente",
+            "amount": -20,
+            "type": "DEBIT",
+            "status": "PENDING",
+            "currencyCode": "BRL",
+        }]
+        result = sync_account_transactions(self.remote, user=self.user)
+        self.assertEqual(result["pending"], 1)
+        self.assertEqual(Transaction.objects.count(), 0)
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_remote_change_does_not_overwrite_financial_value(self, mocked):
+        payload = {
+            "id": "55555555-5555-5555-5555-555555555555",
+            "providerId": "provider-conflict-1",
+            "date": "2026-09-08T12:00:00.000Z",
+            "description": "TED ORIGINAL",
+            "amount": -100,
+            "type": "DEBIT",
+            "status": "POSTED",
+            "currencyCode": "BRL",
+        }
+        mocked.return_value = [payload]
+        sync_account_transactions(self.remote, user=self.user)
+        tx = Transaction.objects.get()
+        payload["amount"] = -120
+        mocked.return_value = [payload]
+        result = sync_account_transactions(self.remote, user=self.user)
+        tx.refresh_from_db()
+        self.assertEqual(tx.amount, 100)
+        self.assertEqual(result["conflicts"], 1)
+        link = PluggyTransactionLink.objects.get()
+        self.assertTrue(link.has_conflict)
+        self.assertIn("valor", link.conflict_fields)
+
+    def test_item_status_detail_is_preserved_for_partial_success(self):
+        payload = {
+            "id": self.item.item_id,
+            "connector": {"id": 200, "name": "Meu Pluggy"},
+            "status": "UPDATED",
+            "executionStatus": "PARTIAL_SUCCESS",
+            "lastUpdatedAt": "2026-09-08T17:50:54.000Z",
+            "statusDetail": {
+                "accounts": {
+                    "isUpdated": True,
+                    "warnings": [],
+                },
+                "investments": {
+                    "isUpdated": False,
+                    "warnings": ["Produto indisponível"],
+                },
+            },
+        }
+
+        item = upsert_item(self.config, payload, user=self.user)
+
+        self.assertEqual(item.execution_status, "PARTIAL_SUCCESS")
+        self.assertTrue(item.status_detail["accounts"]["isUpdated"])
+        self.assertFalse(item.status_detail["investments"]["isUpdated"])
+
+    @patch("integrations.pluggy_sync.list_accounts")
+    def test_bank_account_can_be_created_and_linked_automatically(self, mocked):
+        self.remote.delete()
+        mocked.return_value = [{
+            "id": "66666666-6666-6666-6666-666666666666",
+            "type": "BANK",
+            "subtype": "CHECKING_ACCOUNT",
+            "number": "0001/98765-4",
+            "name": "Conta Corrente",
+            "marketingName": "Conta Principal",
+            "balance": 2500.10,
+            "currencyCode": "BRL",
+            "bankData": {"transferNumber": "260/0001/98765-4"},
+        }]
+        accounts, created = upsert_accounts(self.item)
+        self.assertEqual(len(accounts), 1)
+        self.assertEqual(created, 1)
+        self.assertIsNotNone(accounts[0].local_account_id)
+        self.assertTrue(accounts[0].local_account.ofx_account_id.startswith("PLUGGY:"))
+
+
+
+class PluggyMeuPluggyConnectorTests(TestCase):
+    def setUp(self):
+        User = get_user_model()
+        self.admin = User.objects.create_superuser(
+            username="pluggy-root",
+            email="root@example.test",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.config = PluggyConfiguration(
+            name="Pluggy Meu Pluggy",
+            client_id="client-200",
+            created_by=self.admin,
+        )
+        self.config.set_client_secret(
+            "segredo-super-reservado"
+        )
+        self.config.save()
+
+    @override_settings(PLUGGY_EMBEDDED_CONNECT_ENABLED=True)
+    def test_connect_token_uses_backend_only_and_connector_200(self):
+        from django.urls import reverse
+
+        self.client.force_login(
+            self.admin
+        )
+
+        with (
+            patch(
+                "integrations.pluggy_views.retrieve_connector",
+                return_value={
+                    "id": 200,
+                    "name": "MeuPluggy",
+                },
+            ),
+            patch(
+                "integrations.pluggy_views.create_connect_token",
+                return_value="connect-token-publico-curto",
+            ) as mocked_token,
+        ):
+            response = self.client.post(
+                reverse(
+                    "integrations:pluggy-connect-token"
+                ),
+                REMOTE_ADDR="127.0.0.1",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        payload = response.json()
+
+        self.assertEqual(
+            payload["connectorId"],
+            200,
+        )
+        self.assertEqual(
+            payload["accessToken"],
+            "connect-token-publico-curto",
+        )
+        self.assertNotIn(
+            "clientSecret",
+            payload,
+        )
+        self.assertNotIn(
+            "apiKey",
+            payload,
+        )
+
+        mocked_token.assert_called_once_with(
+            self.config,
+            client_user_id=(
+                f"financeiro-user-{self.admin.pk}"
+            ),
+            item_id=None,
+        )
+
+        self.assertIn(
+            "no-store",
+            response.headers[
+                "Cache-Control"
+            ],
+        )
+
+    @override_settings(PLUGGY_EMBEDDED_CONNECT_ENABLED=True)
+    def test_widget_success_item_is_retrieved_server_side_before_storage(self):
+        from django.urls import reverse
+
+        self.client.force_login(
+            self.admin
+        )
+
+        item_id = (
+            "20000000-0000-0000-0000-"
+            "000000000001"
+        )
+
+        with patch(
+            "integrations.pluggy_views.retrieve_item",
+            return_value={
+                "id": item_id,
+                "connector": {
+                    "id": 200,
+                    "name": "MeuPluggy",
+                },
+                "status": "UPDATED",
+                "executionStatus": "SUCCESS",
+            },
+        ):
+            response = self.client.post(
+                reverse(
+                    "integrations:pluggy-capture-item"
+                ),
+                {
+                    "item_id": item_id,
+                },
+                REMOTE_ADDR="127.0.0.1",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            200,
+        )
+
+        item = PluggyItem.objects.get(
+            item_id=item_id
+        )
+
+        self.assertEqual(
+            item.connector_id,
+            200,
+        )
+        self.assertEqual(
+            item.created_by,
+            self.admin,
+        )
+
+    def test_overview_defaults_to_manual_item_id_flow(self):
+        from django.urls import reverse
+
+        self.client.force_login(
+            self.admin
+        )
+
+        response = self.client.get(
+            reverse(
+                "integrations:pluggy-overview"
+            ),
+            REMOTE_ADDR="127.0.0.1",
+        )
+
+        self.assertContains(
+            response,
+            "Registrar Item ID do Meu Pluggy",
+        )
+        self.assertContains(
+            response,
+            "Conectar Conta",
+        )
+        self.assertNotContains(
+            response,
+            "pluggy-connect/v2.8.2/pluggy-connect.js",
+        )
+
+        csp = response.headers.get(
+            "Content-Security-Policy",
+            "",
+        )
+        self.assertNotIn(
+            "https://cdn.pluggy.ai",
+            csp,
+        )
+        self.assertNotIn(
+            "frame-src https://*.pluggy.ai",
+            csp,
+        )
+        self.assertNotEqual(
+            response.headers.get(
+                "Cross-Origin-Opener-Policy"
+            ),
+            "same-origin-allow-popups",
+        )
+
+    @override_settings(PLUGGY_EMBEDDED_CONNECT_ENABLED=True)
+    def test_overview_can_enable_connector_200_widget_explicitly(self):
+        from django.urls import reverse
+
+        self.client.force_login(
+            self.admin
+        )
+
+        response = self.client.get(
+            reverse(
+                "integrations:pluggy-overview"
+            ),
+            REMOTE_ADDR="127.0.0.1",
+        )
+
+        self.assertContains(
+            response,
+            "Abrir Pluggy Connect embutido",
+        )
+        self.assertContains(
+            response,
+            "pluggy-connect/v2.8.2/pluggy-connect.js",
+        )
+
+        csp = response.headers.get(
+            "Content-Security-Policy",
+            "",
+        )
+        self.assertIn(
+            "https://cdn.pluggy.ai",
+            csp,
+        )
+        self.assertIn(
+            "frame-src https://*.pluggy.ai",
+            csp,
+        )
+        self.assertEqual(
+            response.headers.get(
+                "Cross-Origin-Opener-Policy"
+            ),
+            "same-origin-allow-popups",
+        )
+
+    def test_connect_token_endpoint_is_disabled_by_default(self):
+        from django.urls import reverse
+
+        self.client.force_login(
+            self.admin
+        )
+
+        response = self.client.post(
+            reverse(
+                "integrations:pluggy-connect-token"
+            ),
+            REMOTE_ADDR="127.0.0.1",
+        )
+
+        self.assertEqual(
+            response.status_code,
+            409,
+        )
+        self.assertIn(
+            "Development > Demo",
+            response.json()["error"],
+        )
+
+    def test_meu_pluggy_item_does_not_use_direct_patch_update(self):
+        from django.urls import reverse
+
+        item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id=(
+                "20000000-0000-0000-0000-"
+                "000000000002"
+            ),
+            connector_id=200,
+            connector_name="MeuPluggy",
+            status="UPDATED",
+            created_by=self.admin,
+        )
+
+        self.client.force_login(
+            self.admin
+        )
+
+        with patch(
+            "integrations.pluggy_views.trigger_item_update"
+        ) as mocked:
+            response = self.client.post(
+                reverse(
+                    "integrations:pluggy-trigger-update",
+                    args=[
+                        item.pk,
+                    ],
+                ),
+                REMOTE_ADDR="127.0.0.1",
+            )
+
+        self.assertEqual(
+            response.status_code,
+            302,
+        )
+        mocked.assert_not_called()
+
+
+class PluggyConnectTokenApiTests(TestCase):
+    def test_create_connect_token_never_sends_client_secret_to_connect_endpoint(self):
+        from integrations.pluggy import create_connect_token
+
+        config = PluggyConfiguration(
+            name="Pluggy API Token",
+            client_id="client-id",
+        )
+        config.set_client_secret(
+            "client-secret-nao-pode-ir-ao-widget"
+        )
+        config.set_api_key(
+            "api-key-servidor"
+        )
+        config.api_key_expires_at = (
+            timezone.now()
+            + timedelta(
+                hours=1,
+            )
+        )
+        config.save()
+
+        with patch(
+            "integrations.pluggy._request_json",
+            return_value={
+                "accessToken": "connect-token",
+            },
+        ) as mocked:
+            token = create_connect_token(
+                config,
+                client_user_id="financeiro-user-1",
+            )
+
+        self.assertEqual(
+            token,
+            "connect-token",
+        )
+
+        args, kwargs = mocked.call_args
+
+        self.assertEqual(
+            args[:2],
+            (
+                "POST",
+                "/connect_token",
+            ),
+        )
+        self.assertEqual(
+            kwargs["api_key"],
+            "api-key-servidor",
+        )
+        self.assertEqual(
+            kwargs["json"],
+            {
+                "options": {
+                    "clientUserId": (
+                        "financeiro-user-1"
+                    ),
+                    "avoidDuplicates": True,
+                }
+            },
+        )
+        self.assertNotIn(
+            "clientSecret",
+            str(
+                kwargs["json"]
+            ),
+        )
+
+
+class PluggyCleanupTests(TestCase):
+    def setUp(self):
+        from finance.models import InternalTransfer
+
+        self.InternalTransfer = InternalTransfer
+        self.user = get_user_model().objects.create_superuser(
+            username="cleanup-admin",
+            email="cleanup@example.test",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.config = PluggyConfiguration(name="Pluggy Cleanup", client_id="cleanup-client")
+        self.config.set_client_secret("cleanup-secret")
+        self.config.save()
+        self.item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id="77777777-7777-7777-7777-777777777777",
+            connector_name="Sandbox Open Finance",
+            status="UPDATED",
+            last_sync_at=timezone.now(),
+            created_by=self.user,
+        )
+        self.bank = Bank.objects.create(name="Sib Bank")
+        self.local = Account.objects.create(
+            bank=self.bank,
+            nickname="Sandbox Conta",
+            branch="0001",
+            number="123456",
+            digit="7",
+            account_type=Account.AccountType.CHECKING,
+            currency="BRL",
+            ofx_account_id="PLUGGY:88888888-8888-8888-8888-888888888888",
+            is_own_account=True,
+        )
+        self.remote = PluggyAccount.objects.create(
+            item=self.item,
+            pluggy_account_id="88888888-8888-8888-8888-888888888888",
+            local_account=self.local,
+            remote_type="BANK",
+            subtype="CHECKING_ACCOUNT",
+            name="Sandbox Conta",
+            currency="BRL",
+        )
+
+    def _pluggy_transaction(self, *, fitid="PLUGGY:tx-cleanup", amount="50.00"):
+        return Transaction.objects.create(
+            account=self.local,
+            posted_at=timezone.now(),
+            competence_date=timezone.localdate(),
+            amount=amount,
+            direction=Transaction.Direction.DEBIT,
+            transaction_type=Transaction.TransactionType.PIX,
+            source_type=Transaction.SourceType.API,
+            fitid=fitid,
+            raw_description="PIX TESTE SANDBOX",
+            normalized_description="PIX TESTE SANDBOX",
+            fingerprint="a" * 64,
+            raw_data={"provider": "PLUGGY", "pluggy": {"id": fitid}},
+            notes="Importado automaticamente via Pluggy / Open Finance.",
+            created_by=self.user,
+        )
+
+    def test_cleanup_deletes_pluggy_owned_transaction_but_preserves_ofx_transaction(self):
+        from integrations.pluggy_cleanup import build_cleanup_preview, cleanup_pluggy_data
+
+        pluggy_tx = self._pluggy_transaction()
+        ofx_tx = Transaction.objects.create(
+            account=self.local,
+            posted_at=timezone.now() - timedelta(days=1),
+            competence_date=timezone.localdate() - timedelta(days=1),
+            amount="25.00",
+            direction=Transaction.Direction.CREDIT,
+            transaction_type=Transaction.TransactionType.PIX,
+            source_type=Transaction.SourceType.OFX,
+            fitid="OFX-EXISTENTE-1",
+            raw_description="PIX OFX EXISTENTE",
+            normalized_description="PIX OFX EXISTENTE",
+            fingerprint="b" * 64,
+            raw_data={"provider": "OFX"},
+            created_by=self.user,
+        )
+        PluggyTransactionLink.objects.create(
+            pluggy_account=self.remote,
+            remote_transaction_id="remote-pluggy-1",
+            transaction=pluggy_tx,
+        )
+        PluggyTransactionLink.objects.create(
+            pluggy_account=self.remote,
+            remote_transaction_id="remote-existing-1",
+            transaction=ofx_tx,
+        )
+
+        other_bank = Bank.objects.create(name="Outro Banco")
+        other_account = Account.objects.create(
+            bank=other_bank,
+            nickname="Conta Destino",
+            branch="0001",
+            number="987654",
+            digit="3",
+            account_type=Account.AccountType.CHECKING,
+            currency="BRL",
+            is_own_account=True,
+        )
+        credit_leg = Transaction.objects.create(
+            account=other_account,
+            posted_at=pluggy_tx.posted_at,
+            competence_date=pluggy_tx.competence_date,
+            amount=pluggy_tx.amount,
+            direction=Transaction.Direction.CREDIT,
+            transaction_type=Transaction.TransactionType.PIX,
+            source_type=Transaction.SourceType.MANUAL,
+            fitid="",
+            raw_description="TRANSFERÊNCIA INTERNA TESTE",
+            normalized_description="TRANSFERÊNCIA INTERNA TESTE",
+            fingerprint="d" * 64,
+            raw_data={},
+            created_by=self.user,
+        )
+        internal_transfer = self.InternalTransfer.objects.create(
+            debit_transaction=pluggy_tx,
+            credit_transaction=credit_leg,
+            status=self.InternalTransfer.Status.CONFIRMED,
+            match_method=self.InternalTransfer.MatchMethod.MANUAL,
+            confidence=100,
+        )
+
+        preview = build_cleanup_preview(item=self.item)
+        self.assertEqual(preview.transactions_to_delete, 1)
+        self.assertEqual(preview.transactions_preserved, 1)
+        self.assertEqual(preview.links, 2)
+        self.assertEqual(preview.internal_transfers_to_delete, 1)
+
+        result = cleanup_pluggy_data(item_pk=self.item.pk)
+
+        self.assertEqual(result.transactions_deleted, 1)
+        self.assertEqual(result.transactions_preserved, 1)
+        self.assertEqual(result.internal_transfers_deleted, 1)
+        self.assertFalse(self.InternalTransfer.objects.filter(pk=internal_transfer.pk).exists())
+        self.assertTrue(Transaction.objects.filter(pk=credit_leg.pk).exists())
+        self.assertFalse(Transaction.objects.filter(pk=pluggy_tx.pk).exists())
+        self.assertTrue(Transaction.objects.filter(pk=ofx_tx.pk).exists())
+        self.assertEqual(PluggyTransactionLink.objects.count(), 0)
+        self.item.refresh_from_db()
+        self.assertIsNone(self.item.last_sync_at)
+
+    def test_cleanup_can_remove_empty_local_account_and_local_item(self):
+        from integrations.pluggy_cleanup import cleanup_pluggy_data
+
+        pluggy_tx = self._pluggy_transaction(fitid="PLUGGY:tx-remove-all")
+        PluggyTransactionLink.objects.create(
+            pluggy_account=self.remote,
+            remote_transaction_id="remote-remove-all",
+            transaction=pluggy_tx,
+        )
+
+        item_pk = self.item.pk
+        account_pk = self.local.pk
+        result = cleanup_pluggy_data(
+            item_pk=item_pk,
+            delete_empty_local_accounts=True,
+            remove_item=True,
+        )
+
+        self.assertEqual(result.transactions_deleted, 1)
+        self.assertEqual(result.local_accounts_deleted, 1)
+        self.assertTrue(result.item_removed)
+        self.assertFalse(Account.objects.filter(pk=account_pk).exists())
+        self.assertFalse(PluggyItem.objects.filter(pk=item_pk).exists())
+
+    def test_cleanup_preserves_local_account_when_non_pluggy_data_exists(self):
+        from integrations.pluggy_cleanup import cleanup_pluggy_data
+
+        pluggy_tx = self._pluggy_transaction(fitid="PLUGGY:tx-preserve-account")
+        PluggyTransactionLink.objects.create(
+            pluggy_account=self.remote,
+            remote_transaction_id="remote-preserve-account",
+            transaction=pluggy_tx,
+        )
+        Transaction.objects.create(
+            account=self.local,
+            posted_at=timezone.now() - timedelta(days=2),
+            competence_date=timezone.localdate() - timedelta(days=2),
+            amount="10.00",
+            direction=Transaction.Direction.CREDIT,
+            transaction_type=Transaction.TransactionType.OTHER,
+            source_type=Transaction.SourceType.MANUAL,
+            fitid="",
+            raw_description="LANÇAMENTO MANUAL",
+            normalized_description="LANÇAMENTO MANUAL",
+            fingerprint="c" * 64,
+            raw_data={},
+            created_by=self.user,
+        )
+
+        result = cleanup_pluggy_data(
+            item_pk=self.item.pk,
+            delete_empty_local_accounts=True,
+        )
+
+        self.assertEqual(result.local_accounts_deleted, 0)
+        self.assertEqual(result.local_accounts_preserved, 1)
+        self.assertTrue(Account.objects.filter(pk=self.local.pk).exists())
+
+    def test_cleanup_view_requires_password_and_confirmation_text(self):
+        from django.urls import reverse
+
+        self.client.force_login(self.user)
+        pluggy_tx = self._pluggy_transaction(fitid="PLUGGY:tx-view")
+        PluggyTransactionLink.objects.create(
+            pluggy_account=self.remote,
+            remote_transaction_id="remote-view",
+            transaction=pluggy_tx,
+        )
+
+        url = reverse("integrations:pluggy-cleanup-item", args=[self.item.pk])
+        response = self.client.post(
+            url,
+            {
+                "confirmation": "EXCLUIR",
+                "current_password": "senha-incorreta",
+            },
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "A senha atual não confere")
+        self.assertTrue(Transaction.objects.filter(pk=pluggy_tx.pk).exists())
+
+        response = self.client.post(
+            url,
+            {
+                "confirmation": "EXCLUIR",
+                "current_password": "Senha-Muito-Forte-123!",
+            },
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(Transaction.objects.filter(pk=pluggy_tx.pk).exists())

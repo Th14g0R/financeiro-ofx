@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+{% block title %}Excluir dados Pluggy{% endblock %}
+
+{% block content %}
+<div class="container py-4" style="max-width: 980px;">
+  <div class="d-flex justify-content-between align-items-start gap-3 mb-4">
+    <div>
+      <h1 class="h3 mb-1">Excluir dados copiados da Pluggy</h1>
+      <p class="text-secondary mb-0">
+        {% if scope_type == "item" %}
+          A operação será aplicada ao Item <strong>{{ item.connector_name|default:item.item_id }}</strong>.
+        {% else %}
+          A operação será aplicada somente à conta
+          <strong>{{ pluggy_account.name|default:pluggy_account.masked_number }}</strong>
+          do Item <strong>{{ item.connector_name|default:item.item_id }}</strong>.
+        {% endif %}
+      </p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{% url 'integrations:pluggy-overview' %}">Cancelar</a>
+  </div>
+
+  <div class="alert alert-danger">
+    <div class="fw-semibold mb-1">Operação destrutiva</div>
+    <div>
+      Somente movimentações cuja origem é comprovadamente <strong>Pluggy / API</strong> serão excluídas.
+      Se uma movimentação já existia por OFX, PDF ou outra origem e apenas recebeu um vínculo Pluggy,
+      o lançamento financeiro será preservado e somente o vínculo será removido.
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white fw-semibold">Prévia da exclusão</div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-6 col-lg-3">
+          <div class="text-secondary small">Contas Pluggy no escopo</div>
+          <div class="h4 mb-0">{{ preview.pluggy_accounts }}</div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="text-secondary small">Vínculos Pluggy</div>
+          <div class="h4 mb-0">{{ preview.links }}</div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="text-secondary small">Movimentações a excluir</div>
+          <div class="h4 mb-0 text-danger">{{ preview.transactions_to_delete }}</div>
+        </div>
+        <div class="col-6 col-lg-3">
+          <div class="text-secondary small">Movimentações preservadas</div>
+          <div class="h4 mb-0 text-success">{{ preview.transactions_preserved }}</div>
+        </div>
+      </div>
+
+      {% if preview.internal_transfers_to_delete %}
+      <div class="alert alert-warning mt-3 mb-0">
+        {{ preview.internal_transfers_to_delete }} transferência(s) interna(s) derivada(s) das
+        movimentações excluídas também será(ão) removida(s), pois não pode(m) existir sem uma das pernas.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if preview.local_accounts %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white fw-semibold">Contas locais relacionadas</div>
+    <div class="table-responsive">
+      <table class="table align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Conta local</th>
+            <th>Situação para exclusão da conta</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for account in preview.local_accounts %}
+          <tr>
+            <td>{{ account.label }}</td>
+            <td>
+              {% if account.can_delete %}
+                <span class="badge text-bg-success">Pode ser excluída se ficar vazia</span>
+              {% else %}
+                <span class="badge text-bg-secondary">Será preservada</span>
+                <div class="small text-secondary mt-1">
+                  {% for reason in account.reasons %}
+                    {% if not forloop.first %} · {% endif %}{{ reason }}
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="card border-danger shadow-sm">
+    <div class="card-header bg-danger-subtle text-danger fw-semibold">Confirmar exclusão</div>
+    <div class="card-body">
+      <form method="post" novalidate data-loading-form data-loading-text="Excluindo dados...">
+        {% csrf_token %}
+
+        {% if form.non_field_errors %}
+          <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+        {% endif %}
+
+        <div class="form-check mb-3">
+          {{ form.delete_empty_local_accounts }}
+          <label class="form-check-label" for="{{ form.delete_empty_local_accounts.id_for_label }}">
+            {{ form.delete_empty_local_accounts.label }}
+          </label>
+          {% for error in form.delete_empty_local_accounts.errors %}
+            <div class="text-danger small">{{ error }}</div>
+          {% endfor %}
+        </div>
+
+        {% if form.remove_item %}
+        <div class="form-check mb-3">
+          {{ form.remove_item }}
+          <label class="form-check-label" for="{{ form.remove_item.id_for_label }}">
+            {{ form.remove_item.label }}
+          </label>
+          <div class="form-text">
+            Isso remove somente o cadastro local do Item. A conexão existente no Pluggy Dashboard não é apagada.
+          </div>
+          {% for error in form.remove_item.errors %}
+            <div class="text-danger small">{{ error }}</div>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="row g-3">
+          <div class="col-12 col-md-5">
+            <label class="form-label" for="{{ form.confirmation.id_for_label }}">{{ form.confirmation.label }}</label>
+            {{ form.confirmation }}
+            {% for error in form.confirmation.errors %}
+              <div class="text-danger small mt-1">{{ error }}</div>
+            {% endfor %}
+          </div>
+          <div class="col-12 col-md-7">
+            <label class="form-label" for="{{ form.current_password.id_for_label }}">{{ form.current_password.label }}</label>
+            {{ form.current_password }}
+            <div class="form-text">{{ form.current_password.help_text }}</div>
+            {% for error in form.current_password.errors %}
+              <div class="text-danger small mt-1">{{ error }}</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2 mt-4">
+          <button class="btn btn-danger" type="submit">Excluir dados definitivamente</button>
+          <a class="btn btn-outline-secondary" href="{% url 'integrations:pluggy-overview' %}">Não excluir</a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="small text-secondary mt-3">
+    Bancos e contrapartes eventualmente já existentes no cadastro são preservados por segurança.
+    A operação também não envia DELETE/PATCH para a Pluggy.
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+{% load static %}
+<script src="{% static 'js/pluggy_overview.js' %}"></script>
+{% endblock %}

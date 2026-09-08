@@ -1,0 +1,324 @@
+{% extends "base.html" %}
+{% load static %}
+{% block title %}Open Finance / Meu Pluggy{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+
+  <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+    <div>
+      <h1 class="h3 mb-1">Open Finance / Meu Pluggy</h1>
+      <p class="text-secondary mb-0">
+        Copie para o Financeiro OFX os dados das contas que você já mantém conectadas no Meu Pluggy.
+      </p>
+    </div>
+
+    {% if can_manage_integrations %}
+    <a class="btn btn-outline-secondary" href="{% url 'integrations:pluggy-configuration' %}">
+      Credenciais da API Pluggy
+    </a>
+    {% endif %}
+  </div>
+
+  <div class="alert alert-success">
+    <div class="fw-semibold mb-1">Para usar seus dados bancários reais</div>
+    <div>
+      Você <strong>não precisa criar novamente as conexões bancárias</strong> no Financeiro OFX.
+      Mantenha PicPay, RecargaPay e os demais bancos conectados no <strong>Meu Pluggy</strong>.
+      No <strong>Pluggy Dashboard &gt; Development &gt; Demo</strong>, clique em
+      <strong>Conectar Conta</strong> e escolha <strong>Meu Pluggy</strong>.
+      Esse Item funciona como proxy para os consentimentos que já existem no seu Meu Pluggy.
+    </div>
+    <div class="small mt-2">
+      <strong>Importante:</strong> “Sandbox Open Finance” contém somente dados fictícios.
+      Para dados reais provenientes do Meu Pluggy, o Item registrado aqui deve ser do
+      conector <strong>Meu Pluggy (ID 200)</strong>.
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-12 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="text-secondary small">API Pluggy</div>
+          {% if configuration %}
+            <div class="fw-semibold">{{ configuration.name }}</div>
+            <div class="small mt-1">Client ID: {{ configuration.client_id|slice:":8" }}••••••</div>
+            <div class="mt-2">
+              {% if configuration.status == "OK" %}
+                <span class="badge text-bg-success">Autenticada</span>
+              {% elif configuration.status == "ERROR" %}
+                <span class="badge text-bg-danger">Erro</span>
+              {% else %}
+                <span class="badge text-bg-secondary">Não testada</span>
+              {% endif %}
+            </div>
+          {% else %}
+            <div class="text-danger">Ainda não configurada.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="text-secondary small">Items registrados</div>
+          <div class="display-6">{{ items|length }}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-12 col-lg-4">
+      <div class="card border-0 shadow-sm h-100">
+        <div class="card-body">
+          <div class="text-secondary small">Divergências protegidas</div>
+          <div class="display-6">{{ conflicts }}</div>
+          <div class="small text-secondary">
+            Valores, datas e descrições já gravados não são sobrescritos silenciosamente.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {% if configuration %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-body">
+      <div class="d-flex flex-wrap gap-2 align-items-center">
+        {% if can_manage_integrations %}
+        <form method="post" action="{% url 'integrations:pluggy-test' %}" data-loading-form data-loading-text="Testando API...">
+          {% csrf_token %}
+          <button class="btn btn-outline-secondary" type="submit">Testar API</button>
+        </form>
+
+        {% if embedded_connect_enabled %}
+        <button
+          type="button"
+          class="btn btn-outline-primary pluggy-connect-button"
+          data-mode="create"
+          data-token-url="{% url 'integrations:pluggy-connect-token' %}"
+          data-capture-url="{% url 'integrations:pluggy-capture-item' %}"
+        >
+          Abrir Pluggy Connect embutido
+        </button>
+        {% endif %}
+        {% endif %}
+
+        <a class="btn btn-primary" href="https://dashboard.pluggy.ai" target="_blank" rel="noopener noreferrer">
+          Abrir Pluggy Dashboard
+        </a>
+        <a class="btn btn-outline-primary" href="https://meu.pluggy.ai/connections" target="_blank" rel="noopener noreferrer">
+          Abrir Meu Pluggy
+        </a>
+      </div>
+
+      <div id="pluggyConnectStatus" class="small mt-3" role="status" aria-live="polite"></div>
+
+      {% if can_manage_integrations %}
+      {% if embedded_connect_enabled %}
+      <form id="pluggyConnectCsrfForm" method="post" action="{% url 'integrations:pluggy-connect-token' %}" class="d-none">
+        {% csrf_token %}
+      </form>
+      {% endif %}
+
+      <hr>
+
+      <div class="fw-semibold mb-1">Registrar Item ID do Meu Pluggy</div>
+      <div class="small text-secondary mb-3">
+        No Dashboard, abra <strong>Development &gt; Demo</strong>, clique em <strong>Conectar Conta</strong>,
+        selecione <strong>Meu Pluggy</strong> e conclua o vínculo com a mesma conta usada em
+        <strong>meu.pluggy.ai</strong>. Depois use o menu do novo Item para <strong>Copiar Item ID</strong>.
+      </div>
+
+      <form method="post" action="{% url 'integrations:pluggy-register-item' %}" class="row g-2 align-items-end" data-loading-form data-loading-text="Validando Item...">
+        {% csrf_token %}
+        <div class="col-12 col-lg-6">
+          <label class="form-label" for="{{ item_form.item_id.id_for_label }}">{{ item_form.item_id.label }}</label>
+          {{ item_form.item_id }}
+          <div class="form-text">{{ item_form.item_id.help_text }}</div>
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-primary" type="submit">Registrar Item ID</button>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% for item in items %}
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-header bg-white">
+      <div class="d-flex flex-column flex-xl-row justify-content-between gap-3 align-items-xl-start">
+        <div>
+          <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
+            <span class="fw-semibold">{{ item.connector_name|default:"Conexão Pluggy" }}</span>
+
+            {% if item.connector_id == 200 %}
+              <span class="badge text-bg-success">Meu Pluggy · dados reais</span>
+            {% elif "Sandbox" in item.connector_name or "Pluggy Bank" in item.connector_name %}
+              <span class="badge text-bg-secondary">Sandbox · dados fictícios</span>
+            {% endif %}
+
+            {% if item.status == "UPDATING" %}
+              <span class="badge text-bg-warning">Sincronizando na Pluggy</span>
+            {% elif item.status == "UPDATED" and item.execution_status == "SUCCESS" %}
+              <span class="badge text-bg-success">Sincronização concluída</span>
+            {% elif item.status == "UPDATED" and item.execution_status == "PARTIAL_SUCCESS" %}
+              <span class="badge text-bg-warning">Concluída parcialmente</span>
+            {% elif item.status == "LOGIN_ERROR" or item.status == "OUTDATED" %}
+              <span class="badge text-bg-danger">Sincronização com erro</span>
+            {% else %}
+              <span class="badge text-bg-secondary">{{ item.status|default:"Status desconhecido" }}</span>
+            {% endif %}
+          </div>
+
+          <div class="small text-secondary">
+            Item {{ item.item_id }} · Connector {{ item.connector_id|default:"—" }} ·
+            status <strong>{{ item.status|default:"—" }}</strong> /
+            execução <strong>{{ item.execution_status|default:"—" }}</strong>
+          </div>
+          <div class="small text-secondary mt-1">
+            Última atualização na Pluggy:
+            <strong>{% if item.last_updated_at %}{{ item.last_updated_at|date:"d/m/Y H:i:s" }}{% else %}—{% endif %}</strong>
+            · Última cópia para o Financeiro:
+            <strong>{% if item.last_sync_at %}{{ item.last_sync_at|date:"d/m/Y H:i:s" }}{% else %}ainda não realizada{% endif %}</strong>
+          </div>
+        </div>
+
+        <div class="d-flex flex-wrap gap-2">
+          <form method="post" action="{% url 'integrations:pluggy-refresh-item' item.pk %}" data-loading-form data-loading-text="Consultando situação...">
+            {% csrf_token %}
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Atualizar situação</button>
+          </form>
+
+          <form method="post" action="{% url 'integrations:pluggy-sync-item' item.pk %}" data-loading-form data-loading-text="Copiando dados...">
+            {% csrf_token %}
+            <button class="btn btn-sm btn-primary" type="submit" {% if item.status == "UPDATING" %}disabled{% endif %}>
+              {% if item.status == "UPDATING" %}Aguardando Pluggy{% else %}Copiar dados{% endif %}
+            </button>
+          </form>
+
+          {% if item.connector_id == 200 %}
+          <a class="btn btn-sm btn-outline-primary" href="https://meu.pluggy.ai/connections" target="_blank" rel="noopener noreferrer">
+            Gerenciar no Meu Pluggy
+          </a>
+          {% else %}
+          <a class="btn btn-sm btn-outline-primary" href="https://dashboard.pluggy.ai" target="_blank" rel="noopener noreferrer">
+            Abrir no Dashboard
+          </a>
+          {% endif %}
+
+          {% if can_manage_integrations %}
+          <a class="btn btn-sm btn-outline-danger" href="{% url 'integrations:pluggy-cleanup-item' item.pk %}">
+            Excluir dados copiados
+          </a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    {% if item.status == "UPDATING" %}
+    <div class="alert alert-warning rounded-0 border-start-0 border-end-0 mb-0">
+      A Pluggy ainda está coletando os produtos deste Item. Use <strong>Atualizar situação</strong>
+      após alguns segundos. Quando o status mudar para <strong>UPDATED</strong>, os dados estarão disponíveis para cópia.
+    </div>
+    {% elif item.execution_status == "PARTIAL_SUCCESS" %}
+    <div class="alert alert-warning rounded-0 border-start-0 border-end-0 mb-0">
+      <strong>PARTIAL_SUCCESS:</strong> a execução terminou, mas pelo menos um produto não foi atualizado.
+      Os produtos concluídos podem ser copiados normalmente. Consulte os detalhes abaixo para saber o que falhou.
+    </div>
+    {% endif %}
+
+    {% if item.status_detail %}
+    <div class="px-3 py-2 border-bottom bg-light-subtle">
+      <details>
+        <summary class="small fw-semibold">Detalhes retornados pela Pluggy</summary>
+        <pre class="small mt-2 mb-0 text-wrap">{{ item.status_detail }}</pre>
+      </details>
+    </div>
+    {% endif %}
+
+    <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead class="table-light">
+          <tr>
+            <th>Conta Pluggy</th>
+            <th>Tipo</th>
+            <th>Saldo</th>
+            <th>Conta local</th>
+            <th>Última leitura</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for account in item.accounts.all %}
+          <tr>
+            <td>
+              <div class="fw-semibold">{{ account.name|default:"Conta" }}</div>
+              <div class="small text-secondary">{{ account.masked_number }} · {{ account.pluggy_account_id }}</div>
+            </td>
+            <td>{{ account.remote_type }} / {{ account.subtype }}</td>
+            <td>{% if account.balance != None %}{{ account.balance }} {{ account.currency }}{% else %}—{% endif %}</td>
+            <td>
+              {% if account.local_account %}
+                {{ account.local_account.bank.name }} · {{ account.local_account.nickname }}
+              {% else %}
+                <span class="text-warning">Não vinculada</span>
+              {% endif %}
+            </td>
+            <td>{% if account.last_seen_at %}{{ account.last_seen_at|date:"d/m/Y H:i" }}{% else %}—{% endif %}</td>
+            <td class="text-end">
+              {% if can_manage_integrations %}
+              <div class="d-flex justify-content-end flex-wrap gap-1">
+                <a class="btn btn-sm btn-outline-secondary" href="{% url 'integrations:pluggy-map-account' account.pk %}">Vincular</a>
+                <a class="btn btn-sm btn-outline-danger" href="{% url 'integrations:pluggy-cleanup-account' account.pk %}">Excluir dados</a>
+              </div>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr>
+            <td colspan="6" class="text-center text-secondary py-4">
+              Ainda não há contas copiadas deste Item.
+              {% if item.status == "UPDATED" %}
+                Clique em <strong>Copiar dados</strong>.
+              {% elif item.status == "UPDATING" %}
+                A sincronização na Pluggy ainda está em andamento.
+              {% else %}
+                Atualize a situação do Item antes de copiar.
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if item.last_error %}
+    <div class="card-footer bg-danger-subtle text-danger">
+      <strong>Último erro:</strong> {{ item.last_error }}
+    </div>
+    {% endif %}
+  </div>
+
+  {% empty %}
+  <div class="card border-0 shadow-sm">
+    <div class="card-body text-center py-5 text-secondary">
+      Nenhum Item Pluggy registrado ainda. Para dados reais, conecte
+      <strong>Meu Pluggy</strong> na Demo do Dashboard e registre aqui o Item ID gerado.
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="{% static 'js/pluggy_overview.js' %}"></script>
+{% if configuration and can_manage_integrations and embedded_connect_enabled %}
+<script src="https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js"></script>
+<script src="{% static 'js/pluggy_connect.js' %}"></script>
+{% endif %}
+{% endblock %}

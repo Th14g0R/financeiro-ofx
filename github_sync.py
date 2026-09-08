@@ -41,6 +41,7 @@ ESSENTIAL_TOP_LEVEL_FILES = (
     "GITHUB.md",
     "Gerenciar-Financeiro-OFX.bat",
     "MERCADO_PAGO_SETUP.md",
+    "PLUGGY_SETUP.md",
     "README.md",
     "SECURITY.md",
     "SECURITY_AUDIT.md",

@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Pluggy | Configuração{% endblock %}
+{% block content %}
+<div class="container py-4"><div class="mb-4"><h1 class="h3 mb-1">Configurar Pluggy</h1><p class="text-secondary mb-0">Use as credenciais da sua Development Application no Pluggy Dashboard.</p></div>
+<div class="alert alert-warning"><strong>Segurança:</strong> Client Secret é criptografado localmente e nunca é exibido novamente. Esta tela só funciona em localhost ou HTTPS.</div>
+<div class="card border-0 shadow-sm"><div class="card-body p-4"><form method="post" novalidate>{% csrf_token %}
+{% if form.non_field_errors %}<div class="alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+<div class="row g-3">
+<div class="col-12 col-lg-6"><label class="form-label">{{ form.name.label }}</label>{{ form.name }}</div>
+<div class="col-12 col-lg-6"><label class="form-label">{{ form.client_id.label }}</label>{{ form.client_id }}{% for e in form.client_id.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
+<div class="col-12"><label class="form-label">{{ form.client_secret.label }}</label>{{ form.client_secret }}<div class="form-text">{{ form.client_secret.help_text }}</div>{% for e in form.client_secret.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
+<div class="col-12"><label class="form-label">{{ form.current_password.label }}</label>{{ form.current_password }}<div class="form-text">{{ form.current_password.help_text }}</div>{% for e in form.current_password.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}</div>
+<div class="col-12"><div class="form-check">{{ form.is_active }}<label class="form-check-label">{{ form.is_active.label }}</label></div></div>
+</div><div class="d-flex gap-2 mt-4"><button class="btn btn-primary">Salvar</button><a class="btn btn-outline-secondary" href="{% url 'integrations:pluggy-overview' %}">Voltar</a></div>
+</form></div></div></div>
+{% endblock %}

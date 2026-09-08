@@ -130,6 +130,24 @@ USE_I18N = True
 USE_TZ = True
 
 
+# ------------------------------------------------------------------
+# Pluggy / Meu Pluggy
+# ------------------------------------------------------------------
+# Em Development Application, o fluxo pessoal mais previsível é autorizar
+# pelo "Ir para Demo" do Pluggy Dashboard e registrar o Item ID no
+# Financeiro. O widget embutido fica opt-in para não induzir o usuário a
+# contornar restrições do ambiente Demo por configuração de frontend.
+PLUGGY_EMBEDDED_CONNECT_ENABLED = os.getenv(
+    "PLUGGY_EMBEDDED_CONNECT_ENABLED",
+    "False",
+).strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+
+
 STATIC_URL = "static/"
 
 STATICFILES_DIRS = [

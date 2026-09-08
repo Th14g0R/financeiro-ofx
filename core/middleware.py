@@ -70,6 +70,32 @@ class SecurityHeadersMiddleware:
                 "frame-ancestors 'none'; "
                 "form-action 'self'"
             )
+        elif (
+            request.path.startswith(
+                "/integrations/pluggy/"
+            )
+            and settings.PLUGGY_EMBEDDED_CONNECT_ENABLED
+        ):
+            # Exceção mínima e restrita ao Pluggy Connect quando a
+            # integração embutida estiver explicitamente habilitada.
+            csp = (
+                "default-src 'self'; "
+                "script-src 'self' "
+                "https://cdn.jsdelivr.net "
+                "https://cdn.pluggy.ai; "
+                "script-src-attr 'none'; "
+                "style-src 'self' https://cdn.jsdelivr.net; "
+                "style-src-elem 'self' https://cdn.jsdelivr.net; "
+                "style-src-attr 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "font-src 'self' data:; "
+                "connect-src 'self' https://*.pluggy.ai; "
+                "frame-src https://*.pluggy.ai; "
+                "object-src 'none'; "
+                "base-uri 'self'; "
+                "frame-ancestors 'none'; "
+                "form-action 'self'"
+            )
         else:
             csp = (
                 "default-src 'self'; "
@@ -96,6 +122,18 @@ class SecurityHeadersMiddleware:
             "Content-Security-Policy",
             csp,
         )
+
+        if (
+            request.path.startswith(
+                "/integrations/pluggy/"
+            )
+            and settings.PLUGGY_EMBEDDED_CONNECT_ENABLED
+        ):
+            # OAuth pode abrir uma janela externa quando o widget estiver
+            # habilitado. A exceção não é aplicada ao fluxo manual.
+            response.headers[
+                "Cross-Origin-Opener-Policy"
+            ] = "same-origin-allow-popups"
 
         response.headers.setdefault(
             "Permissions-Policy",
