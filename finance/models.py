@@ -155,6 +155,18 @@ class Account(models.Model):
             "Será usado para reconhecimento automático da conta."
         ),
     )
+    holder_name = models.CharField(
+        "Titular",
+        max_length=200,
+        blank=True,
+        help_text="Nome do titular informado pela instituição/Open Finance, quando disponível.",
+    )
+    holder_tax_id = models.CharField(
+        "CPF/CNPJ do titular",
+        max_length=32,
+        blank=True,
+        help_text="Documento do titular informado pela instituição/Open Finance, quando disponível.",
+    )
     is_own_account = models.BooleanField(
         "Esta conta é minha",
         default=True,
@@ -203,6 +215,8 @@ class Account(models.Model):
         self.digit = self.digit.strip()
         self.currency = self.currency.strip().upper()
         self.ofx_account_id = self.ofx_account_id.strip()
+        self.holder_name = " ".join(self.holder_name.split())
+        self.holder_tax_id = self.holder_tax_id.strip()
 
         if len(self.currency) != 3 or not self.currency.isalpha():
             raise ValidationError(
@@ -529,6 +543,32 @@ class Transaction(models.Model):
         "Observações",
         blank=True,
     )
+    is_financially_ignored = models.BooleanField(
+        "Ignorar nos totais financeiros",
+        default=False,
+        db_index=True,
+        help_text=(
+            "Mantém o lançamento para auditoria/proveniência, mas o exclui "
+            "dos totais e gráficos financeiros após revisão de duplicidade."
+        ),
+    )
+    ignored_reason = models.CharField(
+        "Motivo da exclusão financeira",
+        max_length=255,
+        blank=True,
+    )
+    canonical_transaction = models.ForeignKey(
+        "self",
+        verbose_name="Movimentação canônica",
+        related_name="merged_duplicates",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text=(
+            "Quando este lançamento foi descartado/mesclado como duplicado, "
+            "aponta para a movimentação mantida como canônica."
+        ),
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         verbose_name="Criado por",
@@ -669,6 +709,98 @@ class Transaction(models.Model):
             f"{self.get_direction_display()} | "
             f"{self.amount:.2f} | "
             f"{self.account}"
+        )
+
+
+class TransactionDuplicateReview(models.Model):
+    class Classification(models.TextChoices):
+        EXACT = "EXACT", "Duplicidade muito provável"
+        POSSIBLE = "POSSIBLE", "Possível duplicidade"
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "Pendente de revisão"
+        KEEP_BOTH = "KEEP_BOTH", "Manter as duas"
+        KEEP_FIRST = "KEEP_FIRST", "Manter primeira"
+        KEEP_SECOND = "KEEP_SECOND", "Manter segunda"
+        MERGED_FIRST = "MERGED_FIRST", "Mesclada na primeira"
+        MERGED_SECOND = "MERGED_SECOND", "Mesclada na segunda"
+
+    first_transaction = models.ForeignKey(
+        Transaction,
+        verbose_name="Primeira movimentação",
+        related_name="duplicate_reviews_as_first",
+        on_delete=models.CASCADE,
+    )
+    second_transaction = models.ForeignKey(
+        Transaction,
+        verbose_name="Segunda movimentação",
+        related_name="duplicate_reviews_as_second",
+        on_delete=models.CASCADE,
+    )
+    classification = models.CharField(
+        "Classificação",
+        max_length=12,
+        choices=Classification.choices,
+        db_index=True,
+    )
+    confidence = models.PositiveSmallIntegerField(
+        "Confiança",
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    match_reasons = models.JSONField(
+        "Evidências",
+        default=list,
+        blank=True,
+    )
+    status = models.CharField(
+        "Situação",
+        max_length=16,
+        choices=Status.choices,
+        default=Status.PENDING,
+        db_index=True,
+    )
+    reviewed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Revisado por",
+        related_name="reviewed_transaction_duplicates",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    reviewed_at = models.DateTimeField(
+        "Revisado em",
+        null=True,
+        blank=True,
+    )
+    created_at = models.DateTimeField("Criado em", auto_now_add=True)
+    updated_at = models.DateTimeField("Atualizado em", auto_now=True)
+
+    class Meta:
+        ordering = ["status", "-confidence", "-created_at"]
+        verbose_name = "Revisão de duplicidade"
+        verbose_name_plural = "Revisões de duplicidade"
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(first_transaction_id__lt=F("second_transaction_id")),
+                name="fin_dup_review_ordered_pair",
+            ),
+            models.UniqueConstraint(
+                fields=["first_transaction", "second_transaction"],
+                name="fin_dup_review_unique_pair",
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["status", "-confidence"],
+                name="fin_dup_status_conf_idx",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"{self.first_transaction_id} x {self.second_transaction_id} "
+            f"({self.confidence}%)"
         )
 
 

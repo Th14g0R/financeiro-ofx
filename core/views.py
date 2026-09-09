@@ -452,7 +452,9 @@ def _available_years():
     years = {
         value.year
         for value in (
-            Transaction.objects.dates(
+            Transaction.objects.filter(
+                is_financially_ignored=False,
+            ).dates(
                 "posted_at",
                 "year",
                 order="DESC",
@@ -499,6 +501,7 @@ def home(request):
             Transaction.objects.filter(
                 posted_at__date__gte=start,
                 posted_at__date__lte=end,
+                is_financially_ignored=False,
             )
         )
     )
@@ -630,7 +633,9 @@ def home(request):
         InternalTransfer.objects.filter(
             status=(
                 InternalTransfer.Status.CONFIRMED
-            )
+            ),
+            debit_transaction__is_financially_ignored=False,
+            credit_transaction__is_financially_ignored=False,
         )
         .filter(
             transfer_period_filter
@@ -657,7 +662,9 @@ def home(request):
         InternalTransfer.objects.filter(
             status=(
                 InternalTransfer.Status.POSSIBLE
-            )
+            ),
+            debit_transaction__is_financially_ignored=False,
+            credit_transaction__is_financially_ignored=False,
         )
         .filter(
             transfer_period_filter

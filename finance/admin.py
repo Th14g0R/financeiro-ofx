@@ -7,6 +7,7 @@ from .models import Counterparty
 from .models import CounterpartyAlias
 from .models import InternalTransfer
 from .models import Transaction
+from .models import TransactionDuplicateReview
 
 
 @admin.register(Bank)
@@ -37,6 +38,7 @@ class AccountAdmin(admin.ModelAdmin):
         "account_type",
         "currency",
         "ofx_account_id",
+        "holder_name",
         "is_own_account",
         "is_active",
     )
@@ -52,6 +54,8 @@ class AccountAdmin(admin.ModelAdmin):
         "branch",
         "number",
         "ofx_account_id",
+        "holder_name",
+        "holder_tax_id",
     )
     autocomplete_fields = ("bank",)
     ordering = (
@@ -88,11 +92,13 @@ class TransactionAdmin(admin.ModelAdmin):
         "counterparty",
         "category",
         "fitid",
+        "is_financially_ignored",
     )
     list_filter = (
         "direction",
         "transaction_type",
         "source_type",
+        "is_financially_ignored",
         "account__bank",
         "account",
         "category",
@@ -204,3 +210,30 @@ class InternalTransferAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
+
+@admin.register(TransactionDuplicateReview)
+class TransactionDuplicateReviewAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "classification",
+        "confidence",
+        "status",
+        "first_transaction",
+        "second_transaction",
+        "reviewed_by",
+        "reviewed_at",
+    )
+    list_filter = ("classification", "status")
+    search_fields = (
+        "first_transaction__raw_description",
+        "second_transaction__raw_description",
+        "first_transaction__fitid",
+        "second_transaction__fitid",
+    )
+    autocomplete_fields = (
+        "first_transaction",
+        "second_transaction",
+        "reviewed_by",
+    )
+    readonly_fields = ("created_at", "updated_at")
+

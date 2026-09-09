@@ -265,6 +265,17 @@ class PluggyItem(models.Model):
         default=dict,
         blank=True,
     )
+    identity_data = models.JSONField(
+        "Identidade do titular",
+        default=dict,
+        blank=True,
+        help_text="Snapshot retornado pelo produto Identity da Pluggy, quando disponível.",
+    )
+    last_sync_summary = models.JSONField(
+        "Resumo da última cópia",
+        default=dict,
+        blank=True,
+    )
     last_updated_at = models.DateTimeField(
         "Última atualização na Pluggy",
         null=True,
@@ -298,6 +309,14 @@ class PluggyItem(models.Model):
 
 
 class PluggyAccount(models.Model):
+    class MatchStatus(models.TextChoices):
+        UNCHECKED = "UNCHECKED", "Não analisada"
+        AUTO_CREATED = "AUTO_CREATED", "Conta criada automaticamente"
+        AUTO_LINKED = "AUTO_LINKED", "Vinculada automaticamente"
+        REVIEW = "REVIEW", "Similaridade para revisar"
+        MANUAL = "MANUAL", "Vínculo definido pelo usuário"
+        KEPT_NEW = "KEPT_NEW", "Conta separada confirmada"
+
     item = models.ForeignKey(
         PluggyItem,
         verbose_name="Conexão Pluggy",
@@ -341,6 +360,40 @@ class PluggyAccount(models.Model):
     bank_data = models.JSONField(
         "Dados bancários normalizados",
         default=dict,
+        blank=True,
+    )
+    owner_name = models.CharField(
+        "Titular informado pela Pluggy",
+        max_length=200,
+        blank=True,
+    )
+    owner_tax_number = models.CharField(
+        "Documento do titular informado pela Pluggy",
+        max_length=32,
+        blank=True,
+    )
+    match_status = models.CharField(
+        "Situação do vínculo local",
+        max_length=16,
+        choices=MatchStatus.choices,
+        default=MatchStatus.UNCHECKED,
+        db_index=True,
+    )
+    suggested_account = models.ForeignKey(
+        Account,
+        verbose_name="Conta local sugerida",
+        related_name="pluggy_account_suggestions",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    match_score = models.PositiveSmallIntegerField(
+        "Confiança da similaridade",
+        default=0,
+    )
+    match_reason = models.CharField(
+        "Motivo da similaridade",
+        max_length=255,
         blank=True,
     )
     detected_bank_name = models.CharField(

@@ -451,7 +451,8 @@ def analyze_internal_transfers(
             "counterparty",
         )
         .filter(
-            account__is_own_account=True
+            account__is_own_account=True,
+            is_financially_ignored=False,
         )
         .order_by(
             "posted_at",

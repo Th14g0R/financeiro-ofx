@@ -953,6 +953,72 @@ def resolve_transaction_counterparty(
     return counterparty
 
 
+@db_transaction.atomic
+def resolve_transaction_counterparty_from_hint(
+    transaction: Transaction,
+    *,
+    name: str,
+    tax_id: str = "",
+    bank_identifier: str = "",
+    source: str = "Pluggy paymentData",
+) -> Counterparty | None:
+    """Resolve contraparte a partir de dados estruturados da instituição.
+
+    É usado quando a API fornece payer/receiver separadamente. A descrição
+    original da movimentação permanece intocada.
+    """
+    sanitized = sanitize_counterparty_name(name)
+    if not sanitized.name:
+        return resolve_transaction_counterparty(transaction)
+
+    candidate = CounterpartyCandidate(
+        name=sanitized.name,
+        normalized_name=sanitized.normalized_name,
+        masked_identifier="",
+        bank_identifier=(bank_identifier or sanitized.bank_identifier or "").strip(),
+        source=source,
+    )
+    digits = _digits(tax_id)
+
+    # CPF/CNPJ completo é um identificador mais forte que o nome. Isso evita
+    # criar duas Pessoas quando o banco usa grafias diferentes para a mesma
+    # contraparte em OFX/PDF e paymentData da Pluggy.
+    counterparty = None
+    if len(digits) in {11, 14}:
+        counterparty = Counterparty.objects.filter(tax_id=digits).first()
+    if counterparty is None:
+        counterparty = _find_counterparty_for_candidate(candidate)
+    if counterparty is None:
+        counterparty = Counterparty(
+            display_name=candidate.name,
+            normalized_name=candidate.normalized_name,
+            kind=infer_counterparty_kind(candidate.name),
+            is_active=True,
+        )
+        if len(digits) in {11, 14} and not Counterparty.objects.filter(tax_id=digits).exists():
+            counterparty.tax_id = digits
+        counterparty.full_clean()
+        counterparty.save()
+
+    _apply_candidate_metadata(counterparty, candidate)
+    if len(digits) in {11, 14}:
+        if not counterparty.tax_id:
+            conflict = Counterparty.objects.filter(tax_id=digits).exclude(pk=counterparty.pk).exists()
+            if not conflict:
+                counterparty.tax_id = digits
+                counterparty.save(update_fields=["tax_id", "updated_at"])
+        _ensure_alias(
+            counterparty=counterparty,
+            alias=digits,
+            alias_type=CounterpartyAlias.AliasType.TAX_ID,
+        )
+
+    transaction.counterparty = counterparty
+    transaction.counterparty_raw_name = candidate.name
+    transaction.save(update_fields=["counterparty", "counterparty_raw_name", "updated_at"])
+    return counterparty
+
+
 def _copy_aliases(
     *,
     source: Counterparty,

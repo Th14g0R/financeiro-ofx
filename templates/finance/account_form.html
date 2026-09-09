@@ -133,6 +133,19 @@
                         {% endfor %}
                     </div>
 
+                    <div class="col-12 col-md-8">
+                        <label for="{{ form.holder_name.id_for_label }}" class="form-label">{{ form.holder_name.label }}</label>
+                        {{ form.holder_name }}
+                        <div class="form-text">Pode ser preenchido automaticamente pelo Open Finance/Pluggy.</div>
+                        {% for error in form.holder_name.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+                    </div>
+
+                    <div class="col-12 col-md-4">
+                        <label for="{{ form.holder_tax_id.id_for_label }}" class="form-label">{{ form.holder_tax_id.label }}</label>
+                        {{ form.holder_tax_id }}
+                        {% for error in form.holder_tax_id.errors %}<div class="text-danger small mt-1">{{ error }}</div>{% endfor %}
+                    </div>
+
                     <div class="col-12 col-md-6">
                         <div class="form-check mt-2">
                             {{ form.is_own_account }}

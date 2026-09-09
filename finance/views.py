@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
@@ -8,14 +9,18 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db import transaction as db_transaction
 from django.db.models import Count
+from django.db.models import Exists
+from django.db.models import OuterRef
 from django.db.models import Q
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from django.shortcuts import redirect
 from django.shortcuts import render
+from django.core.paginator import Paginator
 from django.urls import reverse
 from django.urls import reverse_lazy
 from django.views.decorators.http import require_POST
+from django.views.decorators.http import require_http_methods
 from django.views.generic import CreateView
 from django.views.generic import ListView
 from django.views.generic import UpdateView
@@ -26,12 +31,14 @@ from .forms import CounterpartyAliasForm
 from .forms import CounterpartyMergeConfirmForm
 from .forms import CounterpartyMergeSelectionForm
 from .forms import TransactionForm
+from .forms import DuplicateReviewForm
 from .models import Account
 from .models import Bank
 from .models import Counterparty
 from .models import CounterpartyAlias
 from .models import InternalTransfer
 from .models import Transaction
+from .models import TransactionDuplicateReview
 from services.counterparties import analyze_manual_counterparty_merge
 from services.counterparties import merge_counterparties_manually
 from services.counterparties import normalize_identity_text
@@ -42,6 +49,8 @@ from services.internal_transfers import confirm_internal_transfer
 from services.internal_transfers import deactivate_account_internal_links
 from services.internal_transfers import reject_internal_transfer
 from services.internal_transfers import reopen_internal_transfer
+from services.duplicates import analyze_duplicates
+from services.duplicates import review_duplicate_pair
 from core.sorting import apply_sorting
 
 
@@ -155,6 +164,8 @@ class AccountListView(LoginRequiredMixin, ListView):
                 | Q(branch__icontains=query)
                 | Q(number__icontains=query)
                 | Q(ofx_account_id__icontains=query)
+                | Q(holder_name__icontains=query)
+                | Q(holder_tax_id__icontains=query)
             )
 
         if bank_id.isdigit():
@@ -316,6 +327,12 @@ class TransactionListView(LoginRequiredMixin, ListView):
     paginate_by = 50
 
     def get_queryset(self):
+        pending_duplicate = TransactionDuplicateReview.objects.filter(
+            status=TransactionDuplicateReview.Status.PENDING,
+        ).filter(
+            Q(first_transaction_id=OuterRef("pk"))
+            | Q(second_transaction_id=OuterRef("pk"))
+        )
         queryset = annotate_financial_scope(
             Transaction.objects.select_related(
                 "account",
@@ -323,6 +340,9 @@ class TransactionListView(LoginRequiredMixin, ListView):
                 "category",
                 "counterparty",
                 "created_by",
+                "canonical_transaction",
+            ).annotate(
+                has_pending_duplicate=Exists(pending_duplicate),
             )
         )
 
@@ -338,6 +358,7 @@ class TransactionListView(LoginRequiredMixin, ListView):
         ).strip()
         date_from = self.request.GET.get("date_from", "").strip()
         date_to = self.request.GET.get("date_to", "").strip()
+        visibility = self.request.GET.get("visibility", "active").strip()
 
         if query:
             normalized_query = normalize_identity_text(query)
@@ -433,6 +454,13 @@ class TransactionListView(LoginRequiredMixin, ListView):
                 posted_at__date__lte=parsed_date_to
             )
 
+        if visibility == "ignored":
+            queryset = queryset.filter(is_financially_ignored=True)
+        elif visibility != "all":
+            queryset = queryset.filter(is_financially_ignored=False)
+
+        self.summary_queryset = queryset
+
         return apply_sorting(
             self.request,
             queryset,
@@ -453,6 +481,33 @@ class TransactionListView(LoginRequiredMixin, ListView):
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+
+        summary_queryset = getattr(self, "summary_queryset", None)
+        if summary_queryset is None:
+            summary_queryset = self.get_queryset()
+        financial_queryset = summary_queryset.filter(is_financially_ignored=False)
+        total_credit = (
+            financial_queryset.filter(direction=Transaction.Direction.CREDIT)
+            .aggregate(total=Sum("amount"))["total"]
+            or Decimal("0.00")
+        )
+        total_debit = (
+            financial_queryset.filter(direction=Transaction.Direction.DEBIT)
+            .aggregate(total=Sum("amount"))["total"]
+            or Decimal("0.00")
+        )
+        context.update(
+            {
+                "filtered_credit": total_credit,
+                "filtered_debit": total_debit,
+                "filtered_net": total_credit - total_debit,
+                "filtered_count": financial_queryset.count(),
+                "ignored_in_filter_count": summary_queryset.filter(is_financially_ignored=True).count(),
+                "pending_duplicate_count": TransactionDuplicateReview.objects.filter(
+                    status=TransactionDuplicateReview.Status.PENDING
+                ).count(),
+            }
+        )
 
         context.update(
             {
@@ -501,10 +556,112 @@ class TransactionListView(LoginRequiredMixin, ListView):
                     "date_to",
                     "",
                 ).strip(),
+                "visibility_filter": self.request.GET.get(
+                    "visibility",
+                    "active",
+                ).strip(),
             }
         )
 
         return context
+
+
+@login_required
+@require_POST
+def duplicate_analyze(request):
+    analyzed = analyze_duplicates()
+    pending = TransactionDuplicateReview.objects.filter(
+        status=TransactionDuplicateReview.Status.PENDING
+    ).count()
+    messages.success(
+        request,
+        f"Análise concluída: {analyzed} par(es) comparado(s)/atualizado(s); {pending} pendente(s) para revisão.",
+    )
+    return redirect("finance:duplicate-review-list")
+
+
+@login_required
+def duplicate_review_list(request):
+    status = (request.GET.get("status") or "pending").strip()
+    queryset = TransactionDuplicateReview.objects.select_related(
+        "first_transaction",
+        "first_transaction__account",
+        "first_transaction__account__bank",
+        "first_transaction__counterparty",
+        "second_transaction",
+        "second_transaction__account",
+        "second_transaction__account__bank",
+        "second_transaction__counterparty",
+        "reviewed_by",
+    )
+    if status == "pending":
+        queryset = queryset.filter(status=TransactionDuplicateReview.Status.PENDING)
+    elif status == "reviewed":
+        queryset = queryset.exclude(status=TransactionDuplicateReview.Status.PENDING)
+    paginator = Paginator(queryset, 30)
+    page_obj = paginator.get_page(request.GET.get("page"))
+    return render(
+        request,
+        "finance/duplicate_review_list.html",
+        {
+            "reviews": page_obj.object_list,
+            "page_obj": page_obj,
+            "is_paginated": page_obj.has_other_pages(),
+            "status_filter": status,
+            "pending_count": TransactionDuplicateReview.objects.filter(
+                status=TransactionDuplicateReview.Status.PENDING
+            ).count(),
+        },
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def duplicate_review_detail(request, pk):
+    review = get_object_or_404(
+        TransactionDuplicateReview.objects.select_related(
+            "first_transaction",
+            "first_transaction__account",
+            "first_transaction__account__bank",
+            "first_transaction__counterparty",
+            "second_transaction",
+            "second_transaction__account",
+            "second_transaction__account__bank",
+            "second_transaction__counterparty",
+        ),
+        pk=pk,
+    )
+    if request.method == "POST":
+        form = DuplicateReviewForm(request.POST, user=request.user)
+        if form.is_valid():
+            try:
+                review = review_duplicate_pair(
+                    review,
+                    action=form.cleaned_data["action"],
+                    user=request.user,
+                )
+            except ValueError as exc:
+                messages.error(request, str(exc))
+            else:
+                request.audit_detail = {
+                    "duplicate_review_id": review.pk,
+                    "first_transaction_id": review.first_transaction_id,
+                    "second_transaction_id": review.second_transaction_id,
+                    "decision": review.status,
+                    "confidence": review.confidence,
+                }
+                messages.success(
+                    request,
+                    "Decisão aplicada. Lançamentos desconsiderados permanecem no banco para auditoria, mas deixam de compor os totais.",
+                )
+                return redirect("finance:duplicate-review-list")
+    else:
+        form = DuplicateReviewForm(user=request.user)
+    return render(
+        request,
+        "finance/duplicate_review_detail.html",
+        {"review": review, "form": form},
+    )
 
 
 class TransactionCreateView(

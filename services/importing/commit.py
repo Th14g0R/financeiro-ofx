@@ -128,6 +128,28 @@ def _source_type_for_item(
     return Transaction.SourceType.OFX
 
 
+def _schedule_financial_analysis(
+    transaction_ids: tuple[int, ...] | list[int],
+    *,
+    quarantine_new: bool,
+) -> None:
+    ids = tuple(sorted({int(value) for value in transaction_ids if value}))
+    if not ids:
+        return
+
+    def analyze_after_commit():
+        from services.duplicates import analyze_duplicates
+        from services.internal_transfers import analyze_internal_transfers
+
+        analyze_duplicates(
+            transaction_ids=ids,
+            quarantine_new=quarantine_new,
+        )
+        analyze_internal_transfers(transaction_ids=ids)
+
+    db_transaction.on_commit(analyze_after_commit, robust=True)
+
+
 def _create_transaction(item: ImportItem, user) -> Transaction:
     account = item.statement.matched_account
 
@@ -409,6 +431,7 @@ def commit_item(
     user,
     divergent_resolution: str | None = None,
     force_possible_duplicate: bool = False,
+    schedule_analysis: bool = True,
 ) -> dict[str, int | str]:
     """
     Grava um item isoladamente.
@@ -500,6 +523,11 @@ def commit_item(
                             "imported_transaction",
                         ]
                     )
+                    if schedule_analysis:
+                        _schedule_financial_analysis(
+                            [transaction.pk],
+                            quarantine_new=False,
+                        )
                     return {"status": "updated"}
 
                 _skip_item(
@@ -537,6 +565,11 @@ def commit_item(
                         "imported_transaction",
                     ]
                 )
+                if schedule_analysis:
+                    _schedule_financial_analysis(
+                        [transaction.pk],
+                        quarantine_new=True,
+                    )
                 return {"status": "created"}
 
             raise ImportCommitError(
@@ -597,6 +630,7 @@ def commit_batch(
                 item.pk
             ),
             force_possible_duplicate=False,
+            schedule_analysis=False,
         )
 
         status = result["status"]
@@ -606,36 +640,36 @@ def commit_batch(
 
     refresh_batch_status(batch)
 
-    affected_transaction_ids = tuple(
+    created_transaction_ids = tuple(
         sorted(
             {
                 item.imported_transaction_id
                 for item in pending_items
                 if item.imported_transaction_id
-                and item.commit_status
-                in {
-                    ImportItem.CommitStatus.CREATED,
-                    ImportItem.CommitStatus.UPDATED,
-                }
+                and item.commit_status == ImportItem.CommitStatus.CREATED
+            }
+        )
+    )
+    updated_transaction_ids = tuple(
+        sorted(
+            {
+                item.imported_transaction_id
+                for item in pending_items
+                if item.imported_transaction_id
+                and item.commit_status == ImportItem.CommitStatus.UPDATED
             }
         )
     )
 
-    if affected_transaction_ids:
-        def analyze_after_commit():
-            from services.internal_transfers import (
-                analyze_internal_transfers,
-            )
-
-            analyze_internal_transfers(
-                transaction_ids=(
-                    affected_transaction_ids
-                )
-            )
-
-        db_transaction.on_commit(
-            analyze_after_commit,
-            robust=True,
+    if created_transaction_ids:
+        _schedule_financial_analysis(
+            created_transaction_ids,
+            quarantine_new=True,
+        )
+    if updated_transaction_ids:
+        _schedule_financial_analysis(
+            updated_transaction_ids,
+            quarantine_new=False,
         )
 
     return counters

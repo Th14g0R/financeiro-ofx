@@ -83,6 +83,8 @@ class AccountForm(BootstrapModelForm):
             "account_type",
             "currency",
             "ofx_account_id",
+            "holder_name",
+            "holder_tax_id",
             "is_own_account",
             "is_active",
         ]
@@ -107,6 +109,12 @@ class AccountForm(BootstrapModelForm):
             ),
             "ofx_account_id": forms.TextInput(
                 attrs={"placeholder": "ACCTID encontrado no OFX"}
+            ),
+            "holder_name": forms.TextInput(
+                attrs={"placeholder": "Nome do titular, quando disponível"}
+            ),
+            "holder_tax_id": forms.TextInput(
+                attrs={"placeholder": "CPF/CNPJ do titular"}
             ),
         }
 
@@ -438,4 +446,49 @@ class CounterpartyMergeConfirmForm(
                 ),
             )
 
+        return cleaned
+
+
+class DuplicateReviewForm(forms.Form):
+    ACTIONS = [
+        ("keep_both", "Manter as duas movimentações"),
+        ("keep_first", "Manter a primeira e desconsiderar a segunda"),
+        ("keep_second", "Manter a segunda e desconsiderar a primeira"),
+        ("merge_first", "Mesclar metadados na primeira e desconsiderar a segunda"),
+        ("merge_second", "Mesclar metadados na segunda e desconsiderar a primeira"),
+    ]
+
+    action = forms.ChoiceField(
+        label="Decisão",
+        choices=ACTIONS,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    current_password = forms.CharField(
+        label="Senha atual",
+        required=False,
+        strip=False,
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={"class": "form-control", "autocomplete": "current-password"},
+        ),
+        help_text=(
+            "Obrigatória para confirmar qualquer decisão que altere o tratamento financeiro da duplicidade."
+        ),
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean(self):
+        cleaned = super().clean()
+        action = cleaned.get("action")
+        if action:
+            password = cleaned.get("current_password") or ""
+            if (
+                self.user is None
+                or not self.user.is_authenticated
+                or not self.user.check_password(password)
+            ):
+                self.add_error("current_password", "A senha atual não confere.")
         return cleaned

@@ -25,7 +25,7 @@ from .pluggy import retrieve_item
 from .pluggy import test_connection
 from .pluggy import trigger_item_update
 from .pluggy_cleanup import build_cleanup_preview, cleanup_pluggy_data
-from .pluggy_sync import sync_item, upsert_item
+from .pluggy_sync import refresh_item, resolve_account_similarity, sync_item, upsert_item
 
 
 def _configuration():
@@ -45,12 +45,32 @@ def _require_sensitive(request):
 @login_required
 def pluggy_overview(request):
     configuration = _configuration()
-    items = PluggyItem.objects.select_related("configuration", "created_by").prefetch_related("accounts__local_account", "accounts__local_account__bank").all()
-    conflicts = sum(
-        account.transaction_links.filter(has_conflict=True).count()
-        for item in items
-        for account in item.accounts.all()
+    items = list(
+        PluggyItem.objects.select_related("configuration", "created_by")
+        .prefetch_related(
+            "accounts__local_account",
+            "accounts__local_account__bank",
+            "accounts__suggested_account",
+            "accounts__suggested_account__bank",
+            "accounts__transaction_links",
+        )
+        .all()
     )
+    conflicts = 0
+    for item in items:
+        institutions = []
+        link_count = 0
+        review_count = 0
+        for account in item.accounts.all():
+            conflicts += sum(1 for link in account.transaction_links.all() if link.has_conflict)
+            link_count += sum(1 for link in account.transaction_links.all() if link.transaction_id)
+            if account.match_status == PluggyAccount.MatchStatus.REVIEW:
+                review_count += 1
+            if account.detected_bank_name and account.detected_bank_name not in institutions:
+                institutions.append(account.detected_bank_name)
+        item.detected_institutions = institutions
+        item.transaction_link_count = link_count
+        item.account_review_count = review_count
     return render(
         request,
         "integrations/pluggy_overview.html",
@@ -390,8 +410,7 @@ def pluggy_register_item(request):
 def pluggy_refresh_item(request, pk):
     item = get_object_or_404(PluggyItem, pk=pk, is_active=True)
     try:
-        payload = retrieve_item(item.configuration, item.item_id)
-        item = upsert_item(item.configuration, payload, user=item.created_by)
+        item = refresh_item(item)
     except PluggyApiError as exc:
         item.last_error = str(exc)
         item.save(update_fields=["last_error", "updated_at"])
@@ -428,6 +447,18 @@ def pluggy_sync_item(request, pk):
         if result.legacy_banks_removed:
             detail_parts.append(
                 f"{result.legacy_banks_removed} cadastro(s) proxy antigo(s) removido(s)"
+            )
+        if result.account_reviews_pending:
+            detail_parts.append(
+                f"{result.account_reviews_pending} conta(s) semelhante(s) aguardando sua decisão"
+            )
+        if result.duplicate_reviews_pending:
+            detail_parts.append(
+                f"{result.duplicate_reviews_pending} possível(is) duplicidade(s) de movimentação para revisar"
+            )
+        if result.duplicates_quarantined:
+            detail_parts.append(
+                f"{result.duplicates_quarantined} duplicidade(s) muito provável(is) já desconsiderada(s) dos totais até sua decisão"
             )
         messages.success(
             request,
@@ -477,11 +508,19 @@ def pluggy_map_account(request, pk):
             # segura para exclusão automática pela integração.
             account.local_account_created_by_pluggy = False
             account.local_bank_created_by_pluggy = False
+            account.suggested_account = None
+            account.match_status = PluggyAccount.MatchStatus.MANUAL
+            account.match_score = 100 if account.local_account_id else 0
+            account.match_reason = "vínculo definido manualmente pelo usuário" if account.local_account_id else ""
             account.save(
                 update_fields=[
                     "local_account",
                     "local_account_created_by_pluggy",
                     "local_bank_created_by_pluggy",
+                    "suggested_account",
+                    "match_status",
+                    "match_score",
+                    "match_reason",
                     "updated_at",
                 ]
             )
@@ -490,6 +529,40 @@ def pluggy_map_account(request, pk):
     else:
         form = PluggyAccountMappingForm(initial={"local_account": account.local_account_id})
     return render(request, "integrations/pluggy_map_account.html", {"account": account, "form": form})
+
+
+@system_admin_required
+@require_POST
+def pluggy_resolve_account_similarity(request, pk):
+    account = get_object_or_404(
+        PluggyAccount.objects.select_related(
+            "local_account", "suggested_account", "item"
+        ),
+        pk=pk,
+    )
+    action = (request.POST.get("action") or "").strip()
+    password = request.POST.get("current_password") or ""
+    if not request.user.check_password(password):
+        messages.error(request, "A senha atual não confere. Nenhuma conta foi alterada.")
+        return redirect("integrations:pluggy-overview")
+    try:
+        local_account = resolve_account_similarity(account, action=action)
+    except ValueError as exc:
+        messages.error(request, str(exc))
+    else:
+        request.audit_detail = {
+            "pluggy_account_id": account.pluggy_account_id,
+            "decision": action,
+            "local_account_id": local_account.pk,
+        }
+        if action == "use_existing":
+            messages.success(
+                request,
+                "Conta Pluggy unificada com a conta existente. As movimentações da integração foram preservadas e agora usam a conta escolhida.",
+            )
+        else:
+            messages.success(request, "Conta separada confirmada para esta integração Pluggy.")
+    return redirect("integrations:pluggy-overview")
 
 
 @system_admin_required

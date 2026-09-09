@@ -1,6 +1,48 @@
-# Financeiro OFX — Etapa 10.9.5
+# Financeiro OFX — Etapa 10.9.6.2
 
 
+
+
+## Hotfix 10.9.6.2 — decisão de conta e diagnóstico Pluggy
+
+- corrige o formulário de similaridade que podia perder o valor `action=use_existing` ao desabilitar o botão durante o submit, exibindo incorretamente **Decisão de similaridade inválida**;
+- a decisão **Usar conta existente** volta a executar o fluxo transacional que move as movimentações Pluggy para a conta escolhida e preserva os vínculos da integração;
+- mensagens de erro da sincronização Pluggy agora identificam a etapa que falhou (Item, contas ou transações), facilitando distinguir um Item remoto indisponível de uma falha local;
+- erros 404 de Item deixam explícito que os dados já copiados no Financeiro OFX permanecem preservados.
+
+## Hotfix 10.9.6.1 — correspondência de conta Pluggy sem agência
+
+Corrige a regressão detectada pelo teste `test_account_number_fallback_matches_existing_when_transfer_number_is_missing`: quando a Pluggy retorna o número/dígito da conta, mas omite a agência em `bankData.transferNumber`, uma conta local equivalente (por exemplo `530540-6` x `00530540-6`) agora é encaminhada para revisão de similaridade, em vez de ser criada novamente.
+
+A agência ausente passa a ser tratada como dado desconhecido, e não como divergência. Se houver mais de uma conta local candidata forte, nenhuma é escolhida silenciosamente.
+
+
+## Etapa 10.9.6 — Pente fino financeiro, duplicidades e enriquecimento Pluggy
+
+Esta etapa consolida o Financeiro OFX como extrato canônico multiorigem. As principais mudanças são:
+
+- totais de **entradas, saídas e saldo líquido** diretamente na tela de Movimentações, respeitando os filtros aplicados;
+- nova revisão de **duplicidades e possíveis duplicidades** entre OFX, PDF, API e Pluggy, sem depender de FITIDs iguais;
+- lançamentos descartados/mesclados permanecem auditáveis, mas podem ser retirados dos totais financeiros;
+- importações novas passam por análise de duplicidade após a gravação; duplicidades de confiança muito alta entre origens diferentes podem ficar preventivamente fora dos totais até decisão do usuário;
+- decisões disponíveis: manter ambas, manter A/B ou mesclar metadados em A/B; alterações financeiras exigem a senha do usuário logado;
+- Dashboard, gráficos e detecção de transferências internas ignoram lançamentos marcados como duplicados/desconsiderados;
+- contas Pluggy com zeros à esquerda ou pequenas diferenças de representação passam por análise de similaridade antes de criar uma segunda conta;
+- a integração pode vincular a conta Pluggy a uma conta local existente ou manter uma conta separada, sempre por decisão explícita quando houver similaridade forte;
+- campos **titular** e **CPF/CNPJ do titular** foram adicionados às contas;
+- o snapshot de **Identity** da Pluggy é preservado quando a instituição disponibiliza o produto;
+- `paymentData.payer/receiver` é usado prioritariamente para relacionar Pessoas/Contrapartes, inclusive CPF/CNPJ e identificação bancária quando disponíveis;
+- cada Item Pluggy mostra resumo da última cópia, banco real detectado, quantidade de movimentos vinculados, conflitos, duplicidades e contas que aguardam revisão.
+
+### Após atualizar
+
+Execute as migrations (o gerenciador/atualizador já pode fazer isso automaticamente):
+
+```powershell
+python manage.py migrate
+```
+
+Em seguida, para revisar o histórico já existente, abra **Movimentações → Analisar duplicidades → Revisar duplicidades**. A análise não apaga registros automaticamente.
 
 ## Etapa 10.9.5 — Bancos reais do Meu Pluggy e limpeza completa
 

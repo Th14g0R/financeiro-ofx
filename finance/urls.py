@@ -15,6 +15,9 @@ from .views import counterparty_rebuild
 from .views import TransactionCreateView
 from .views import TransactionListView
 from .views import TransactionUpdateView
+from .views import duplicate_analyze
+from .views import duplicate_review_detail
+from .views import duplicate_review_list
 from .views import account_toggle_active
 from .views import bank_toggle_active
 from .views import internal_transfer_undo
@@ -124,6 +127,21 @@ path(
         "transactions/",
         TransactionListView.as_view(),
         name="transaction-list",
+    ),
+    path(
+        "transactions/duplicates/",
+        duplicate_review_list,
+        name="duplicate-review-list",
+    ),
+    path(
+        "transactions/duplicates/analyze/",
+        duplicate_analyze,
+        name="duplicate-analyze",
+    ),
+    path(
+        "transactions/duplicates/<int:pk>/",
+        duplicate_review_detail,
+        name="duplicate-review-detail",
     ),
     path(
         "transactions/new/",

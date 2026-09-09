@@ -917,3 +917,238 @@ class PluggyUnderlyingBankClassificationTests(TestCase):
         self.assertEqual(legacy_account.bank.name, "PicPay")
         self.assertEqual(tx.account_id, legacy_account.pk)
         self.assertFalse(Bank.objects.filter(pk=legacy_bank.pk).exists())
+
+
+class PluggyAccountSimilarityAndIdentityTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="pluggy-match-user",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.config = PluggyConfiguration(name="Pluggy", client_id="client-match")
+        self.config.set_client_secret("secret")
+        self.config.save()
+        self.item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id="99999999-1111-2222-3333-444444444444",
+            connector_id=200,
+            connector_name="MeuPluggy",
+            status="UPDATED",
+            execution_status="SUCCESS",
+        )
+        self.bank = Bank.objects.create(name="Nubank", code="260")
+        self.existing = Account.objects.create(
+            bank=self.bank,
+            nickname="Nubank",
+            branch="0001",
+            number="530540",
+            digit="6",
+            ofx_account_id="530540-6",
+        )
+
+    @patch("integrations.pluggy_sync.list_accounts")
+    def test_leading_zero_account_is_suggested_instead_of_duplicated(self, mocked):
+        from integrations.pluggy_sync import resolve_account_similarity
+
+        mocked.return_value = [{
+            "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+            "type": "BANK",
+            "subtype": "CHECKING_ACCOUNT",
+            "number": "00530540-6",
+            "name": "Nu Pagamentos S.A. - Instituição de Pagamento (Conta Pré-paga)",
+            "marketingName": "Nubank",
+            "balance": 10.25,
+            "currencyCode": "BRL",
+            "owner": "Titular Teste",
+            "taxNumber": "123.456.789-09",
+            "bankData": {"transferNumber": "260/0001/00530540-6"},
+        }]
+
+        accounts, created = upsert_accounts(self.item)
+
+        self.assertEqual(created, 0)
+        remote = accounts[0]
+        self.assertIsNone(remote.local_account_id)
+        self.assertEqual(remote.suggested_account_id, self.existing.pk)
+        self.assertEqual(remote.match_status, PluggyAccount.MatchStatus.REVIEW)
+        self.assertGreaterEqual(remote.match_score, 90)
+        self.assertEqual(Account.objects.filter(bank=self.bank).count(), 1)
+
+        linked = resolve_account_similarity(remote, action="use_existing")
+        linked.refresh_from_db()
+        remote.refresh_from_db()
+        self.assertEqual(linked.pk, self.existing.pk)
+        self.assertEqual(remote.local_account_id, self.existing.pk)
+        self.assertEqual(remote.match_status, PluggyAccount.MatchStatus.MANUAL)
+        self.assertEqual(linked.holder_name, "Titular Teste")
+        self.assertEqual(linked.holder_tax_id, "123.456.789-09")
+
+
+    @patch("integrations.pluggy_sync.list_accounts")
+    def test_account_number_fallback_matches_existing_when_transfer_number_is_missing(self, mocked):
+        mocked.return_value = [{
+            "id": "dddddddd-eeee-ffff-0000-111111111111",
+            "type": "BANK",
+            "subtype": "CHECKING_ACCOUNT",
+            "number": "00530540-6",
+            "name": "Nubank",
+            "marketingName": "Nubank",
+            "balance": 10.25,
+            "currencyCode": "BRL",
+            "owner": "Titular Teste",
+            "taxNumber": "123.456.789-09",
+            "bankData": {},
+        }]
+
+        accounts, created = upsert_accounts(self.item)
+
+        self.assertEqual(created, 0)
+        remote = accounts[0]
+        self.assertIsNone(remote.local_account_id)
+        self.assertEqual(remote.suggested_account_id, self.existing.pk)
+        self.assertEqual(remote.match_status, PluggyAccount.MatchStatus.REVIEW)
+        self.assertGreaterEqual(remote.match_score, 90)
+        self.assertIn("agência ausente", remote.match_reason)
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_payment_data_links_structured_counterparty(self, mocked):
+        remote = PluggyAccount.objects.create(
+            item=self.item,
+            pluggy_account_id="bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+            local_account=self.existing,
+            remote_type="BANK",
+            subtype="CHECKING_ACCOUNT",
+            name="Nubank",
+            currency="BRL",
+        )
+        mocked.return_value = [{
+            "id": "cccccccc-dddd-eeee-ffff-000000000001",
+            "providerId": "provider-payment-data-1",
+            "date": "2026-09-08T12:00:00.000Z",
+            "description": "Transferência enviada",
+            "amount": -8,
+            "type": "DEBIT",
+            "status": "POSTED",
+            "currencyCode": "BRL",
+            "paymentData": {
+                "receiver": {
+                    "name": "JOAO BARBOSA DE SOUSA",
+                    "routingNumber": "104",
+                    "routingNumberISPB": "00360305",
+                    "documentNumber": {"type": "CPF", "value": "123.456.789-09"},
+                }
+            },
+        }]
+
+        result = sync_account_transactions(remote, user=self.user)
+
+        self.assertEqual(result["created"], 1)
+        tx = Transaction.objects.get(fitid="PLUGGY-PROVIDER:provider-payment-data-1")
+        self.assertIsNotNone(tx.counterparty_id)
+        self.assertEqual(tx.counterparty_raw_name, "JOAO BARBOSA DE SOUSA")
+        self.assertEqual(tx.counterparty.tax_id, "12345678909")
+
+
+class PluggySimilarityDecisionRegressionTests(TestCase):
+    """Regressões do fluxo de decisão manual de contas semelhantes."""
+
+    def setUp(self):
+        self.password = "Senha-Muito-Forte-123!"
+        self.user = get_user_model().objects.create_superuser(
+            username="pluggy-regression-admin",
+            email="admin@example.test",
+            password=self.password,
+        )
+        self.config = PluggyConfiguration(name="Pluggy", client_id="client")
+        self.config.set_client_secret("secret")
+        self.config.save()
+        self.item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id="12121212-3434-5656-7878-909090909090",
+            connector_id=200,
+            connector_name="MeuPluggy",
+            status="UPDATED",
+            execution_status="SUCCESS",
+        )
+        self.bank = Bank.objects.create(name="Nubank", code="260")
+        self.target = Account.objects.create(
+            bank=self.bank,
+            nickname="Nubank existente",
+            branch="0001",
+            number="530540",
+            digit="6",
+            ofx_account_id="530540-6",
+        )
+        self.source = Account.objects.create(
+            bank=self.bank,
+            nickname="Nubank via Pluggy",
+            branch="",
+            number="00530540",
+            digit="6",
+            ofx_account_id="PLUGGY:abababab-abab-abab-abab-abababababab",
+        )
+        self.remote = PluggyAccount.objects.create(
+            item=self.item,
+            pluggy_account_id="abababab-abab-abab-abab-abababababab",
+            local_account=self.source,
+            suggested_account=self.target,
+            remote_type="BANK",
+            subtype="CHECKING_ACCOUNT",
+            name="Nu Pagamentos S.A.",
+            masked_number="00530540-6",
+            currency="BRL",
+            match_status=PluggyAccount.MatchStatus.REVIEW,
+            match_score=100,
+            match_reason="mesmo número de conta após normalizar zeros",
+            local_account_created_by_pluggy=True,
+        )
+        self.transaction = Transaction.objects.create(
+            account=self.source,
+            posted_at=timezone.now(),
+            competence_date=timezone.localdate(),
+            amount="10.00",
+            direction=Transaction.Direction.DEBIT,
+            transaction_type=Transaction.TransactionType.OTHER,
+            source_type=Transaction.SourceType.API,
+            fitid="PLUGGY:transaction-regression",
+            raw_description="Teste de migração de conta",
+            normalized_description="Teste de migração de conta",
+            raw_data={"provider": "PLUGGY"},
+        )
+        PluggyTransactionLink.objects.create(
+            pluggy_account=self.remote,
+            remote_transaction_id="transaction-regression",
+            transaction=self.transaction,
+            remote_hash="hash-regression",
+        )
+
+    def test_use_existing_view_moves_pluggy_transactions_to_existing_account(self):
+        from django.urls import reverse
+
+        self.client.force_login(self.user)
+        response = self.client.post(
+            reverse("integrations:pluggy-resolve-account-similarity", args=[self.remote.pk]),
+            {"current_password": self.password, "action": "use_existing"},
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.remote.refresh_from_db()
+        self.transaction.refresh_from_db()
+        self.assertEqual(self.remote.local_account_id, self.target.pk)
+        self.assertEqual(self.transaction.account_id, self.target.pk)
+        self.assertEqual(self.remote.match_status, PluggyAccount.MatchStatus.MANUAL)
+
+    @patch("integrations.pluggy_sync.retrieve_item")
+    def test_missing_remote_item_error_preserves_context(self, mocked_retrieve):
+        from integrations.pluggy import PluggyApiError
+        from integrations.pluggy_sync import refresh_item
+
+        mocked_retrieve.side_effect = PluggyApiError("item not found", status_code=404)
+        with self.assertRaises(PluggyApiError) as raised:
+            refresh_item(self.item)
+
+        self.assertEqual(raised.exception.status_code, 404)
+        message = str(raised.exception)
+        self.assertIn(self.item.item_id, message)
+        self.assertIn("dados já copiados", message)
+        self.assertIn("mesma aplicação/credenciais", message)

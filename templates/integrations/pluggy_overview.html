@@ -167,7 +167,9 @@
       <div class="d-flex flex-column flex-xl-row justify-content-between gap-3 align-items-xl-start">
         <div>
           <div class="d-flex flex-wrap gap-2 align-items-center mb-1">
-            <span class="fw-semibold">{{ item.connector_name|default:"Conexão Pluggy" }}</span>
+            <span class="fw-semibold">
+              {% if item.detected_institutions %}{{ item.detected_institutions|join:", " }}{% if item.connector_id == 200 %} via Meu Pluggy{% endif %}{% else %}{{ item.connector_name|default:"Conexão Pluggy" }}{% endif %}
+            </span>
 
             {% if item.connector_id == 200 %}
               <span class="badge text-bg-success">Meu Pluggy · dados reais</span>
@@ -254,11 +256,67 @@
     {% if item.status_detail %}
     <div class="px-3 py-2 border-bottom bg-light-subtle">
       <details>
-        <summary class="small fw-semibold">Detalhes retornados pela Pluggy</summary>
+        <summary class="small fw-semibold">Detalhes de execução retornados pela Pluggy</summary>
         <pre class="small mt-2 mb-0 text-wrap">{{ item.status_detail }}</pre>
       </details>
     </div>
     {% endif %}
+
+    <div class="card-body border-bottom bg-light-subtle">
+      <div class="row g-3">
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Contas no Item</div>
+          <div class="fw-semibold">{{ item.accounts.all|length }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Movimentos vinculados</div>
+          <div class="fw-semibold">{{ item.transaction_link_count }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Novos na última cópia</div>
+          <div class="fw-semibold">{{ item.last_sync_summary.transactions_created|default:0 }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Já existentes</div>
+          <div class="fw-semibold">{{ item.last_sync_summary.transactions_existing|default:0 }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Conflitos remotos</div>
+          <div class="fw-semibold">{{ item.last_sync_summary.conflicts|default:0 }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Contas para revisar</div>
+          <div class="fw-semibold {% if item.account_review_count %}text-warning{% endif %}">{{ item.account_review_count }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Duplicidades em revisão</div>
+          <div class="fw-semibold {% if item.last_sync_summary.duplicate_reviews_pending %}text-warning{% endif %}">{{ item.last_sync_summary.duplicate_reviews_pending|default:0 }}</div>
+        </div>
+        <div class="col-6 col-lg-2">
+          <div class="small text-secondary">Desconsideradas preventivamente</div>
+          <div class="fw-semibold {% if item.last_sync_summary.duplicates_quarantined %}text-warning{% endif %}">{{ item.last_sync_summary.duplicates_quarantined|default:0 }}</div>
+        </div>
+      </div>
+
+      {% if item.last_sync_summary.duplicate_reviews_pending %}
+      <div class="mt-3">
+        <a class="btn btn-sm btn-outline-warning" href="{% url 'finance:duplicate-review-list' %}">
+          Revisar duplicidades de movimentações
+        </a>
+      </div>
+      {% endif %}
+
+      {% if item.identity_data %}
+      <details class="mt-3">
+        <summary class="small fw-semibold">Identidade/titular retornado pelo Open Finance</summary>
+        <div class="row g-2 mt-1 small">
+          <div class="col-12 col-md-4"><span class="text-secondary">Nome:</span> {{ item.identity_data.fullName|default:item.identity_data.companyName|default:"—" }}</div>
+          <div class="col-12 col-md-4"><span class="text-secondary">Documento:</span> {{ item.identity_data.document|default:item.identity_data.taxNumber|default:"—" }}</div>
+          <div class="col-12 col-md-4"><span class="text-secondary">Tipo:</span> {{ item.identity_data.documentType|default:"—" }}</div>
+        </div>
+      </details>
+      {% endif %}
+    </div>
 
     <div class="table-responsive">
       <table class="table table-hover align-middle mb-0">
@@ -267,7 +325,8 @@
             <th>Conta Pluggy</th>
             <th>Tipo</th>
             <th>Saldo</th>
-            <th>Conta local</th>
+            <th>Titular / identidade</th>
+            <th>Conta local / vínculo</th>
             <th>Última leitura</th>
             <th></th>
           </tr>
@@ -285,10 +344,34 @@
             <td>{{ account.remote_type }} / {{ account.subtype }}</td>
             <td>{% if account.balance != None %}{{ account.balance }} {{ account.currency }}{% else %}—{% endif %}</td>
             <td>
+              <div>{{ account.owner_name|default:account.local_account.holder_name|default:"—" }}</div>
+              {% if account.owner_tax_number or account.local_account.holder_tax_id %}
+                <div class="small text-secondary">{{ account.owner_tax_number|default:account.local_account.holder_tax_id }}</div>
+              {% endif %}
+            </td>
+            <td>
               {% if account.local_account %}
-                {{ account.local_account.bank.name }} · {{ account.local_account.nickname }}
+                <div>{{ account.local_account.bank.name }} · {{ account.local_account.nickname }}</div>
               {% else %}
-                <span class="text-warning">Não vinculada</span>
+                <span class="text-warning">Ainda não vinculada</span>
+              {% endif %}
+              <div class="small text-secondary mt-1">{{ account.get_match_status_display }}</div>
+              {% if account.match_status == "REVIEW" and account.suggested_account %}
+                <div class="alert alert-warning py-2 px-2 mt-2 mb-0 small">
+                  <div class="fw-semibold">Conta semelhante encontrada ({{ account.match_score }}%)</div>
+                  <div>{{ account.suggested_account.bank.name }} · {{ account.suggested_account.nickname }} · ag. {{ account.suggested_account.branch|default:"—" }} · conta {{ account.suggested_account.formatted_number }}</div>
+                  <div class="text-secondary">{{ account.match_reason }}</div>
+                  {% if can_manage_integrations %}
+                  <form method="post" action="{% url 'integrations:pluggy-resolve-account-similarity' account.pk %}" class="mt-2" data-loading-form data-loading-text="Aplicando decisão...">
+                    {% csrf_token %}
+                    <input type="password" name="current_password" class="form-control form-control-sm mb-2" placeholder="Senha atual para confirmar" autocomplete="current-password" required>
+                    <div class="d-flex flex-wrap gap-1">
+                      <button class="btn btn-sm btn-warning" type="submit" name="action" value="use_existing">Usar conta existente</button>
+                      <button class="btn btn-sm btn-outline-secondary" type="submit" name="action" value="keep_separate">Manter/criar conta separada</button>
+                    </div>
+                  </form>
+                  {% endif %}
+                </div>
               {% endif %}
             </td>
             <td>{% if account.last_seen_at %}{{ account.last_seen_at|date:"d/m/Y H:i" }}{% else %}—{% endif %}</td>
@@ -303,7 +386,7 @@
           </tr>
           {% empty %}
           <tr>
-            <td colspan="6" class="text-center text-secondary py-4">
+            <td colspan="7" class="text-center text-secondary py-4">
               Ainda não há contas copiadas deste Item.
               {% if item.status == "UPDATED" %}
                 Clique em <strong>Copiar dados</strong>.
@@ -339,7 +422,7 @@
 {% endblock %}
 
 {% block extra_js %}
-<script src="{% static 'js/pluggy_overview.js' %}"></script>
+<script src="{% static 'js/pluggy_overview.js' %}?v=10.9.6.2"></script>
 {% if configuration and can_manage_integrations and embedded_connect_enabled %}
 <script src="https://cdn.pluggy.ai/pluggy-connect/v2.8.2/pluggy-connect.js"></script>
 <script src="{% static 'js/pluggy_connect.js' %}"></script>

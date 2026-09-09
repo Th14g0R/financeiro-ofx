@@ -8,17 +8,27 @@ import re
 from typing import Any
 
 from django.db import transaction as db_transaction
+from django.db.models import Q
 from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from finance.models import Account, Bank, Transaction
+from finance.models import Account, Bank, InternalTransfer, Transaction, TransactionDuplicateReview
 from services.counterparties.resolver import resolve_transaction_counterparty
+from services.counterparties.resolver import resolve_transaction_counterparty_from_hint
 from services.importing.staging import build_fingerprint
 from services.internal_transfers.matcher import analyze_internal_transfers
+from services.duplicates import analyze_duplicates
 
 from .models import PluggyAccount, PluggyConfiguration, PluggyItem, PluggyTransactionLink
-from .pluggy import MEU_PLUGGY_CONNECTOR_ID, list_accounts, list_all_transactions, retrieve_item
+from .pluggy import (
+    MEU_PLUGGY_CONNECTOR_ID,
+    PluggyApiError,
+    list_accounts,
+    list_all_transactions,
+    retrieve_identity,
+    retrieve_item,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +44,9 @@ class SyncResult:
     transactions_existing: int = 0
     pending_skipped: int = 0
     conflicts: int = 0
+    account_reviews_pending: int = 0
+    duplicate_reviews_pending: int = 0
+    duplicates_quarantined: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,15 +56,17 @@ class AccountSyncResult:
     local_banks_created: int = 0
     local_accounts_reclassified: int = 0
     legacy_banks_removed: int = 0
+    reviews_pending: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class LocalAccountResolution:
-    account: Account
+    account: Account | None
     account_created: bool = False
     bank_created: bool = False
     account_reclassified: bool = False
     legacy_bank_removed: bool = False
+    review_pending: bool = False
 
 
 def _dt(value: Any):
@@ -153,7 +168,23 @@ def upsert_item(
 
 
 def refresh_item(item: PluggyItem) -> PluggyItem:
-    payload = retrieve_item(item.configuration, item.item_id)
+    try:
+        payload = retrieve_item(item.configuration, item.item_id)
+    except PluggyApiError as exc:
+        if exc.status_code == 404:
+            raise PluggyApiError(
+                (
+                    f"A Pluggy não encontrou o Item remoto {item.item_id}. "
+                    "Os dados já copiados no Financeiro OFX permanecem preservados. "
+                    "Confirme no Pluggy Dashboard se este Item ainda pertence à mesma "
+                    "aplicação/credenciais configuradas e, se necessário, gere um novo Item ID."
+                ),
+                status_code=404,
+            ) from exc
+        raise PluggyApiError(
+            f"Falha ao consultar o Item {item.item_id} na Pluggy: {exc}",
+            status_code=exc.status_code,
+        ) from exc
     return upsert_item(item.configuration, payload, user=item.created_by)
 
 
@@ -237,9 +268,7 @@ def _clean_proxy_institution_name(value: str) -> str:
 
 
 def _bank_identity(item: PluggyItem, payload: dict[str, Any]) -> tuple[str, str]:
-    bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
-    transfer_number = str(bank_data.get("transferNumber") or "")
-    bank_code, _branch, _number, _digit = _parse_transfer_number(transfer_number)
+    bank_code, _branch, _number, _digit = _account_coordinates(payload)
     bank_code = _normalized_bank_code(bank_code)
 
     connector_name = " ".join(str(item.connector_name or "").split()).strip()
@@ -321,6 +350,144 @@ def _delete_empty_owned_legacy_bank(bank: Bank, *, owned: bool) -> bool:
     return True
 
 
+def _digits_only(value: str) -> str:
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _normalized_account_identity(branch: str, number: str, digit: str) -> tuple[str, str]:
+    normalized_branch = _digits_only(branch).lstrip("0") or "0"
+    normalized_number = (_digits_only(number) + _digits_only(digit)).lstrip("0")
+    return normalized_branch, normalized_number
+
+
+def _account_coordinates(payload: dict[str, Any]) -> tuple[str, str, str, str]:
+    """Retorna COMPE/agência/número/dígito usando o dado mais rico disponível.
+
+    A Pluggy expõe ``bankData.transferNumber`` em parte dos conectores, mas o
+    campo ``number`` da Account é obrigatório e pode ser a única identificação
+    disponível. O fallback evita criar uma segunda conta só porque
+    ``transferNumber`` veio vazio no Meu Pluggy/Open Finance.
+    """
+    bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
+    transfer_number = str(bank_data.get("transferNumber") or "").strip()
+    bank_code, branch, number, digit = _parse_transfer_number(transfer_number)
+
+    if not number:
+        account_number = str(payload.get("number") or "").strip()
+        if account_number:
+            _unused_code, _unused_branch, number, digit = _parse_transfer_number(account_number)
+
+    return bank_code, branch, number, digit
+
+
+def _similar_local_accounts(
+    *,
+    bank: Bank,
+    branch: str,
+    number: str,
+    digit: str,
+    exclude_account_id: int | None = None,
+) -> list[tuple[Account, int, str]]:
+    remote_branch, remote_number = _normalized_account_identity(branch, number, digit)
+    if not remote_number:
+        return []
+
+    results: list[tuple[Account, int, str]] = []
+    queryset = Account.objects.filter(bank=bank).order_by("-is_active", "id")
+    if exclude_account_id:
+        queryset = queryset.exclude(pk=exclude_account_id)
+
+    for candidate in queryset:
+        local_branch, local_number = _normalized_account_identity(
+            candidate.branch,
+            candidate.number,
+            candidate.digit,
+        )
+        if not local_number:
+            continue
+
+        score = 0
+        reasons: list[str] = []
+        if local_number == remote_number:
+            score += 75
+            reasons.append("mesmo número de conta após normalizar zeros e dígito")
+        elif len(local_number) >= 6 and len(remote_number) >= 6 and local_number[-6:] == remote_number[-6:]:
+            score += 50
+            reasons.append("mesmos 6 dígitos finais da conta")
+        else:
+            continue
+
+        if local_branch == remote_branch:
+            score += 20
+            reasons.append("mesma agência")
+        elif remote_branch == "0" or local_branch == "0":
+            # Ausência de agência em uma das fontes é informação faltante, não
+            # evidência de divergência. Quando banco + número/dígito normalizados
+            # coincidem exatamente, a conta deve ir para revisão em vez de uma
+            # segunda conta ser criada automaticamente.
+            score += 15
+            reasons.append("agência ausente em uma das fontes")
+
+        if candidate.is_active:
+            score += 5
+        results.append((candidate, min(score, 100), "; ".join(reasons)))
+
+    return sorted(results, key=lambda row: (-row[1], row[0].pk))
+
+
+def _apply_holder_to_local_account(
+    local_account: Account | None,
+    *,
+    owner_name: str,
+    owner_tax_number: str,
+) -> None:
+    if local_account is None:
+        return
+    changed: list[str] = []
+    if owner_name and not local_account.holder_name:
+        local_account.holder_name = owner_name[:200]
+        changed.append("holder_name")
+    if owner_tax_number and not local_account.holder_tax_id:
+        local_account.holder_tax_id = owner_tax_number[:32]
+        changed.append("holder_tax_id")
+    if changed:
+        local_account.save(update_fields=[*changed, "updated_at"])
+
+
+def _create_local_account(
+    pluggy_account: PluggyAccount,
+    payload: dict[str, Any],
+    *,
+    target_bank: Bank,
+    branch: str,
+    number: str,
+    digit: str,
+) -> Account:
+    remote_id = pluggy_account.pluggy_account_id
+    ofx_id = f"PLUGGY:{remote_id}"
+    bank_name = pluggy_account.detected_bank_name or target_bank.name
+    account_number = number or f"PLUGGY-{remote_id[:12]}"
+    nickname = (
+        str(payload.get("marketingName") or payload.get("name") or bank_name)
+        .strip()[:120]
+        or bank_name[:120]
+    )
+    return Account.objects.create(
+        bank=target_bank,
+        nickname=nickname,
+        branch=branch,
+        number=account_number[:40],
+        digit=digit[:10],
+        account_type=_account_type(str(payload.get("subtype") or "")),
+        currency=str(payload.get("currencyCode") or "BRL")[:3].upper(),
+        ofx_account_id=ofx_id,
+        holder_name=pluggy_account.owner_name[:200],
+        holder_tax_id=pluggy_account.owner_tax_number[:32],
+        is_own_account=True,
+        is_active=True,
+    )
+
+
 def _resolve_local_account(
     pluggy_account: PluggyAccount,
     payload: dict[str, Any],
@@ -331,13 +498,18 @@ def _resolve_local_account(
     pluggy_account.detected_bank_name = bank_name
     pluggy_account.detected_bank_code = bank_code
 
-    bank_data = payload.get("bankData") if isinstance(payload.get("bankData"), dict) else {}
-    transfer_number = str(bank_data.get("transferNumber") or "")
-    _raw_code, branch, number, digit = _parse_transfer_number(transfer_number)
+    _raw_code, branch, number, digit = _account_coordinates(payload)
+
+    owner_name = str(payload.get("owner") or "").strip()
+    owner_tax_number = str(payload.get("taxNumber") or "").strip()
+    pluggy_account.owner_name = owner_name[:200]
+    pluggy_account.owner_tax_number = owner_tax_number[:32]
 
     current = pluggy_account.local_account
     if current is None:
         current = Account.objects.filter(ofx_account_id=ofx_id).select_related("bank").first()
+
+    target_bank, target_bank_created = _get_or_create_bank(name=bank_name, code=bank_code)
 
     if current is not None:
         owned_account = (
@@ -351,98 +523,155 @@ def _resolve_local_account(
         )
 
         reclassified = False
-        bank_created = False
         legacy_bank_removed = False
-        if owned_account:
-            target_bank, bank_created = _get_or_create_bank(name=bank_name, code=bank_code)
-            if current.bank_id != target_bank.pk:
-                current.bank = target_bank
-                current.is_active = True
-                current.save(update_fields=["bank", "is_active", "updated_at"])
-                reclassified = True
-                legacy_bank_removed = _delete_empty_owned_legacy_bank(
-                    old_bank,
-                    owned=old_bank_owned,
-                )
-            elif not current.is_active:
-                current.is_active = True
-                current.save(update_fields=["is_active", "updated_at"])
+        if owned_account and current.bank_id != target_bank.pk:
+            current.bank = target_bank
+            current.is_active = True
+            current.save(update_fields=["bank", "is_active", "updated_at"])
+            reclassified = True
+            legacy_bank_removed = _delete_empty_owned_legacy_bank(old_bank, owned=old_bank_owned)
+        elif not current.is_active:
+            current.is_active = True
+            current.save(update_fields=["is_active", "updated_at"])
 
+        _apply_holder_to_local_account(
+            current,
+            owner_name=owner_name,
+            owner_tax_number=owner_tax_number,
+        )
+
+        # A versão anterior podia criar uma conta PLUGGY paralela a uma conta
+        # OFX/PDF equivalente (ex.: 00530540-6 x 530540-6). Não fundimos
+        # silenciosamente: apresentamos a similaridade para decisão do usuário.
+        similar = _similar_local_accounts(
+            bank=target_bank,
+            branch=branch,
+            number=number,
+            digit=digit,
+            exclude_account_id=current.pk,
+        )
+        strong = [row for row in similar if row[1] >= 90]
+        if owned_account and len(strong) == 1:
+            suggestion, score, reason = strong[0]
+            pluggy_account.suggested_account = suggestion
+            pluggy_account.match_status = PluggyAccount.MatchStatus.REVIEW
+            pluggy_account.match_score = score
+            pluggy_account.match_reason = reason[:255]
+        elif pluggy_account.match_status != PluggyAccount.MatchStatus.MANUAL:
+            pluggy_account.suggested_account = None
+            pluggy_account.match_score = 0
+            pluggy_account.match_reason = ""
+            pluggy_account.match_status = (
+                PluggyAccount.MatchStatus.AUTO_CREATED
+                if owned_account
+                else PluggyAccount.MatchStatus.AUTO_LINKED
+            )
+
+        if owned_account:
             pluggy_account.local_account_created_by_pluggy = True
             pluggy_account.local_bank_created_by_pluggy = (
-                bank_created
+                target_bank_created
                 or _bank_known_as_pluggy_created(target_bank)
                 or (current.bank_id == old_bank.pk and old_bank_owned)
             )
 
         return LocalAccountResolution(
             account=current,
-            account_created=False,
-            bank_created=bank_created,
+            bank_created=target_bank_created,
             account_reclassified=reclassified,
             legacy_bank_removed=legacy_bank_removed,
+            review_pending=(pluggy_account.match_status == PluggyAccount.MatchStatus.REVIEW),
         )
 
-    target_bank, bank_created = _get_or_create_bank(name=bank_name, code=bank_code)
+    # Correspondência literal continua segura para vínculo automático.
+    exact = list(
+        Account.objects.filter(
+            bank=target_bank,
+            branch=branch,
+            number=number,
+            digit=digit,
+        )[:2]
+    ) if number else []
+    if len(exact) == 1:
+        account = exact[0]
+        if not account.ofx_account_id:
+            account.ofx_account_id = ofx_id
+            account.save(update_fields=["ofx_account_id", "updated_at"])
+        _apply_holder_to_local_account(account, owner_name=owner_name, owner_tax_number=owner_tax_number)
+        pluggy_account.match_status = PluggyAccount.MatchStatus.AUTO_LINKED
+        pluggy_account.suggested_account = None
+        pluggy_account.match_score = 100
+        pluggy_account.match_reason = "agência, número e dígito idênticos"
+        return LocalAccountResolution(account=account, bank_created=target_bank_created)
 
-    if number:
-        matched = list(
-            Account.objects.filter(
-                bank=target_bank,
-                branch=branch,
-                number=number,
-                digit=digit,
-            )[:2]
-        )
-        if len(matched) == 1:
-            account = matched[0]
-            if not account.ofx_account_id:
-                account.ofx_account_id = ofx_id
-                account.save(update_fields=["ofx_account_id", "updated_at"])
-            # This is a pre-existing account recognized by banking coordinates;
-            # it is linked but not marked as integration-owned.
-            return LocalAccountResolution(
-                account=account,
-                bank_created=bank_created,
-            )
-
-    account_number = number or f"PLUGGY-{remote_id[:12]}"
-    nickname = (
-        str(payload.get("marketingName") or payload.get("name") or bank_name)
-        .strip()[:120]
-        or bank_name[:120]
-    )
-    account = Account.objects.create(
+    similar = _similar_local_accounts(
         bank=target_bank,
-        nickname=nickname,
         branch=branch,
-        number=account_number[:40],
-        digit=digit[:10],
-        account_type=_account_type(str(payload.get("subtype") or "")),
-        currency=str(payload.get("currencyCode") or "BRL")[:3].upper(),
-        ofx_account_id=ofx_id,
-        is_own_account=True,
-        is_active=True,
+        number=number,
+        digit=digit,
+    )
+    strong = [row for row in similar if row[1] >= 90]
+    if len(strong) == 1:
+        suggestion, score, reason = strong[0]
+        pluggy_account.suggested_account = suggestion
+        pluggy_account.match_status = PluggyAccount.MatchStatus.REVIEW
+        pluggy_account.match_score = score
+        pluggy_account.match_reason = reason[:255]
+        # Não cria conta duplicada e não importa transações até o usuário
+        # decidir entre usar a conta existente ou criar uma separada.
+        return LocalAccountResolution(
+            account=None,
+            bank_created=target_bank_created,
+            review_pending=True,
+        )
+
+    account = _create_local_account(
+        pluggy_account,
+        payload,
+        target_bank=target_bank,
+        branch=branch,
+        number=number,
+        digit=digit,
     )
     pluggy_account.local_account_created_by_pluggy = True
     pluggy_account.local_bank_created_by_pluggy = (
-        bank_created or _bank_known_as_pluggy_created(target_bank)
+        target_bank_created or _bank_known_as_pluggy_created(target_bank)
     )
+    pluggy_account.match_status = PluggyAccount.MatchStatus.AUTO_CREATED
+    pluggy_account.suggested_account = None
+    pluggy_account.match_score = 0
+    pluggy_account.match_reason = ""
     return LocalAccountResolution(
         account=account,
         account_created=True,
-        bank_created=bank_created,
+        bank_created=target_bank_created,
     )
 
 
 def sync_accounts(item: PluggyItem) -> AccountSyncResult:
-    payloads = list_accounts(item.configuration, item.item_id)
+    try:
+        payloads = list_accounts(item.configuration, item.item_id)
+    except PluggyApiError as exc:
+        if exc.status_code == 404:
+            raise PluggyApiError(
+                (
+                    f"A Pluggy não encontrou as contas do Item {item.item_id}. "
+                    "O Item pode ter sido removido, recriado ou não pertencer às "
+                    "credenciais atualmente configuradas. Os dados locais foram preservados."
+                ),
+                status_code=404,
+            ) from exc
+        raise PluggyApiError(
+            f"Falha ao listar as contas do Item {item.item_id}: {exc}",
+            status_code=exc.status_code,
+        ) from exc
     now = timezone.now()
     result: list[PluggyAccount] = []
     created_local = 0
     created_banks = 0
     reclassified_accounts = 0
     legacy_banks_removed = 0
+    reviews_pending = 0
     seen_ids: set[str] = set()
 
     with db_transaction.atomic():
@@ -463,6 +692,8 @@ def sync_accounts(item: PluggyItem) -> AccountSyncResult:
                     "currency": str(payload.get("currencyCode") or "BRL")[:3].upper(),
                     "balance": _decimal(payload.get("balance")),
                     "bank_data": bank_data,
+                    "owner_name": str(payload.get("owner") or "")[:200],
+                    "owner_tax_number": str(payload.get("taxNumber") or "")[:32],
                     "is_active": True,
                     "last_seen_at": now,
                 },
@@ -475,6 +706,12 @@ def sync_accounts(item: PluggyItem) -> AccountSyncResult:
                         "local_account",
                         "detected_bank_name",
                         "detected_bank_code",
+                        "owner_name",
+                        "owner_tax_number",
+                        "match_status",
+                        "suggested_account",
+                        "match_score",
+                        "match_reason",
                         "local_account_created_by_pluggy",
                         "local_bank_created_by_pluggy",
                         "updated_at",
@@ -484,6 +721,7 @@ def sync_accounts(item: PluggyItem) -> AccountSyncResult:
                 created_banks += int(resolution.bank_created)
                 reclassified_accounts += int(resolution.account_reclassified)
                 legacy_banks_removed += int(resolution.legacy_bank_removed)
+                reviews_pending += int(resolution.review_pending)
             result.append(account)
 
         if seen_ids:
@@ -495,7 +733,120 @@ def sync_accounts(item: PluggyItem) -> AccountSyncResult:
         local_banks_created=created_banks,
         local_accounts_reclassified=reclassified_accounts,
         legacy_banks_removed=legacy_banks_removed,
+        reviews_pending=reviews_pending,
     )
+
+
+def resolve_account_similarity(
+    pluggy_account: PluggyAccount,
+    *,
+    action: str,
+) -> Account:
+    """Aplica a decisão explícita do usuário sobre uma conta semelhante."""
+    pluggy_account = PluggyAccount.objects.select_related(
+        "local_account", "local_account__bank", "suggested_account", "suggested_account__bank"
+    ).get(pk=pluggy_account.pk)
+
+    with db_transaction.atomic():
+        if action == "use_existing":
+            target = pluggy_account.suggested_account
+            if target is None:
+                raise ValueError("Não há conta existente sugerida para este vínculo.")
+            source = pluggy_account.local_account
+            moved_ids: list[int] = []
+            if source is not None and source.pk != target.pk and pluggy_account.local_account_created_by_pluggy:
+                linked_ids = list(
+                    pluggy_account.transaction_links.exclude(transaction=None).values_list("transaction_id", flat=True)
+                )
+                for tx in Transaction.objects.filter(pk__in=linked_ids):
+                    tx.account = target
+                    tx.save(update_fields=["account", "updated_at"])
+                    moved_ids.append(tx.pk)
+                InternalTransfer.objects.filter(
+                    Q(debit_transaction_id__in=moved_ids) | Q(credit_transaction_id__in=moved_ids)
+                ).delete()
+
+            _apply_holder_to_local_account(
+                target,
+                owner_name=pluggy_account.owner_name,
+                owner_tax_number=pluggy_account.owner_tax_number,
+            )
+            pluggy_account.local_account = target
+            pluggy_account.suggested_account = None
+            pluggy_account.match_status = PluggyAccount.MatchStatus.MANUAL
+            pluggy_account.match_score = 100
+            pluggy_account.match_reason = "conta existente escolhida pelo usuário"
+            pluggy_account.local_account_created_by_pluggy = False
+            pluggy_account.local_bank_created_by_pluggy = False
+            pluggy_account.save(update_fields=[
+                "local_account", "suggested_account", "match_status", "match_score",
+                "match_reason", "local_account_created_by_pluggy", "local_bank_created_by_pluggy", "updated_at"
+            ])
+
+            if source is not None and source.pk != target.pk and not source.transactions.exists() and not source.import_statements.exists():
+                try:
+                    source.delete()
+                except ProtectedError:
+                    pass
+
+            if moved_ids:
+                db_transaction.on_commit(lambda: analyze_duplicates(transaction_ids=moved_ids), robust=True)
+                db_transaction.on_commit(lambda: analyze_internal_transfers(transaction_ids=moved_ids), robust=True)
+            return target
+
+        if action == "keep_separate":
+            if pluggy_account.local_account_id:
+                pluggy_account.suggested_account = None
+                pluggy_account.match_status = PluggyAccount.MatchStatus.KEPT_NEW
+                pluggy_account.match_score = 0
+                pluggy_account.match_reason = "conta separada confirmada pelo usuário"
+                pluggy_account.save(update_fields=[
+                    "suggested_account", "match_status", "match_score", "match_reason", "updated_at"
+                ])
+                return pluggy_account.local_account
+
+            bank = None
+            if pluggy_account.detected_bank_code:
+                bank = Bank.objects.filter(code=pluggy_account.detected_bank_code).first()
+            if bank is None:
+                bank = Bank.objects.filter(name__iexact=pluggy_account.detected_bank_name).first()
+            if bank is None:
+                bank, created = _get_or_create_bank(
+                    name=pluggy_account.detected_bank_name or "Pluggy / Open Finance",
+                    code=pluggy_account.detected_bank_code,
+                )
+                pluggy_account.local_bank_created_by_pluggy = created
+
+            payload = {
+                "marketingName": pluggy_account.name,
+                "name": pluggy_account.name,
+                "number": pluggy_account.masked_number,
+                "subtype": pluggy_account.subtype,
+                "currencyCode": pluggy_account.currency,
+                "bankData": pluggy_account.bank_data or {},
+            }
+            _code, branch, number, digit = _account_coordinates(payload)
+            account = _create_local_account(
+                pluggy_account,
+                payload,
+                target_bank=bank,
+                branch=branch,
+                number=number,
+                digit=digit,
+            )
+            pluggy_account.local_account = account
+            pluggy_account.local_account_created_by_pluggy = True
+            pluggy_account.suggested_account = None
+            pluggy_account.match_status = PluggyAccount.MatchStatus.KEPT_NEW
+            pluggy_account.match_score = 0
+            pluggy_account.match_reason = "nova conta confirmada pelo usuário"
+            pluggy_account.save(update_fields=[
+                "local_account", "local_account_created_by_pluggy", "local_bank_created_by_pluggy",
+                "suggested_account", "match_status", "match_score", "match_reason", "updated_at"
+            ])
+            return account
+
+    raise ValueError("Decisão de similaridade inválida.")
 
 
 def upsert_accounts(item: PluggyItem) -> tuple[list[PluggyAccount], int]:
@@ -546,6 +897,9 @@ def _remote_canonical(payload: dict[str, Any]) -> dict[str, Any]:
         "providerCode": payload.get("providerCode"),
         "paymentData": payload.get("paymentData"),
         "creditCardMetadata": payload.get("creditCardMetadata"),
+        "operationType": payload.get("operationType"),
+        "operationTypeAdditionalInfo": payload.get("operationTypeAdditionalInfo"),
+        "merchant": payload.get("merchant"),
     }
 
 
@@ -570,6 +924,48 @@ def _expected_values(payload: dict[str, Any]):
     return posted_at, abs(amount_signed), direction, description
 
 
+def _payment_counterparty_hint(
+    payload: dict[str, Any],
+    direction: str,
+) -> tuple[str, str, str]:
+    payment_data = payload.get("paymentData")
+    if not isinstance(payment_data, dict):
+        return "", "", ""
+
+    # Para saída, a outra parte é o recebedor. Para entrada, é o pagador.
+    participant_key = "receiver" if direction == Transaction.Direction.DEBIT else "payer"
+    participant = payment_data.get(participant_key)
+    if not isinstance(participant, dict):
+        return "", "", ""
+
+    name = str(participant.get("name") or "").strip()
+    document = participant.get("documentNumber")
+    if isinstance(document, dict):
+        tax_id = str(document.get("value") or "").strip()
+    else:
+        tax_id = str(document or "").strip()
+    bank_identifier = str(
+        participant.get("routingNumberISPB")
+        or participant.get("routingNumber")
+        or ""
+    ).strip()
+    return name[:255], tax_id[:32], bank_identifier[:64]
+
+
+def _resolve_pluggy_counterparty(transaction: Transaction, payload: dict[str, Any]) -> None:
+    name, tax_id, bank_identifier = _payment_counterparty_hint(payload, transaction.direction)
+    if name:
+        resolve_transaction_counterparty_from_hint(
+            transaction,
+            name=name,
+            tax_id=tax_id,
+            bank_identifier=bank_identifier,
+            source="Pluggy paymentData",
+        )
+    else:
+        resolve_transaction_counterparty(transaction)
+
+
 def _conflict_fields(transaction: Transaction, expected) -> list[str]:
     posted_at, amount, direction, description = expected
     fields = []
@@ -590,14 +986,46 @@ def sync_account_transactions(
     user=None,
 ) -> dict[str, int]:
     if pluggy_account.remote_type != "BANK" or not pluggy_account.local_account_id:
-        return {"seen": 0, "created": 0, "existing": 0, "pending": 0, "conflicts": 0}
+        return {
+            "seen": 0,
+            "created": 0,
+            "existing": 0,
+            "pending": 0,
+            "conflicts": 0,
+            "duplicate_reviews": 0,
+            "duplicates_quarantined": 0,
+        }
 
-    payloads = list_all_transactions(
-        pluggy_account.item.configuration,
-        pluggy_account.pluggy_account_id,
-    )
+    try:
+        payloads = list_all_transactions(
+            pluggy_account.item.configuration,
+            pluggy_account.pluggy_account_id,
+        )
+    except PluggyApiError as exc:
+        account_label = pluggy_account.name or pluggy_account.pluggy_account_id
+        if exc.status_code == 404:
+            raise PluggyApiError(
+                (
+                    f"A Pluggy não encontrou as transações da conta {account_label} "
+                    f"(Account ID {pluggy_account.pluggy_account_id}). "
+                    "Os movimentos já copiados no Financeiro OFX permanecem preservados."
+                ),
+                status_code=404,
+            ) from exc
+        raise PluggyApiError(
+            f"Falha ao listar transações da conta {account_label}: {exc}",
+            status_code=exc.status_code,
+        ) from exc
     now = timezone.now()
-    stats = {"seen": 0, "created": 0, "existing": 0, "pending": 0, "conflicts": 0}
+    stats = {
+        "seen": 0,
+        "created": 0,
+        "existing": 0,
+        "pending": 0,
+        "conflicts": 0,
+        "duplicate_reviews": 0,
+        "duplicates_quarantined": 0,
+    }
     created_ids: list[int] = []
 
     for payload in payloads:
@@ -638,6 +1066,8 @@ def sync_account_transactions(
                 stats["conflicts"] += 1
             else:
                 stats["existing"] += 1
+            if not link.transaction.counterparty_id:
+                _resolve_pluggy_counterparty(link.transaction, payload)
             continue
 
         posted_at, amount, direction, description = expected
@@ -683,7 +1113,7 @@ def sync_account_transactions(
                 notes="Importado automaticamente via Pluggy / Open Finance.",
                 created_by=user,
             )
-            resolve_transaction_counterparty(transaction)
+            _resolve_pluggy_counterparty(transaction, payload)
             created_ids.append(transaction.pk)
             stats["created"] += 1
 
@@ -709,21 +1139,83 @@ def sync_account_transactions(
             )
 
     if created_ids:
+        analyze_duplicates(transaction_ids=created_ids, quarantine_new=True)
+        stats["duplicate_reviews"] = (
+            TransactionDuplicateReview.objects.filter(
+                status=TransactionDuplicateReview.Status.PENDING,
+            )
+            .filter(
+                Q(first_transaction_id__in=created_ids)
+                | Q(second_transaction_id__in=created_ids)
+            )
+            .count()
+        )
+        stats["duplicates_quarantined"] = Transaction.objects.filter(
+            pk__in=created_ids,
+            is_financially_ignored=True,
+        ).count()
         analyze_internal_transfers(transaction_ids=created_ids)
     return stats
 
 
 def sync_item(item: PluggyItem, *, user=None) -> SyncResult:
     item = refresh_item(item)
+    identity_data = retrieve_identity(item.configuration, item.item_id)
+    item.identity_data = identity_data
+    item.save(update_fields=["identity_data", "updated_at"])
+
     account_result = sync_accounts(item)
-    totals = {"seen": 0, "created": 0, "existing": 0, "pending": 0, "conflicts": 0}
+
+    identity_name = str(
+        identity_data.get("fullName")
+        or identity_data.get("companyName")
+        or ""
+    ).strip()
+    identity_tax = str(
+        identity_data.get("document")
+        or identity_data.get("taxNumber")
+        or ""
+    ).strip()
+    if identity_name or identity_tax:
+        for remote_account in account_result.accounts:
+            if remote_account.local_account_id:
+                _apply_holder_to_local_account(
+                    remote_account.local_account,
+                    owner_name=remote_account.owner_name or identity_name,
+                    owner_tax_number=remote_account.owner_tax_number or identity_tax,
+                )
+
+    totals = {
+        "seen": 0,
+        "created": 0,
+        "existing": 0,
+        "pending": 0,
+        "conflicts": 0,
+        "duplicate_reviews": 0,
+        "duplicates_quarantined": 0,
+    }
     for account in account_result.accounts:
         stats = sync_account_transactions(account, user=user)
         for key in totals:
             totals[key] += stats[key]
+
     item.last_sync_at = timezone.now()
     item.last_error = ""
-    item.save(update_fields=["last_sync_at", "last_error", "updated_at"])
+    item.last_sync_summary = {
+        "accounts": len(account_result.accounts),
+        "accounts_created": account_result.local_accounts_created,
+        "banks_created": account_result.local_banks_created,
+        "accounts_reclassified": account_result.local_accounts_reclassified,
+        "account_reviews_pending": account_result.reviews_pending,
+        "transactions_seen": totals["seen"],
+        "transactions_created": totals["created"],
+        "transactions_existing": totals["existing"],
+        "pending_skipped": totals["pending"],
+        "conflicts": totals["conflicts"],
+        "duplicate_reviews_pending": totals["duplicate_reviews"],
+        "duplicates_quarantined": totals["duplicates_quarantined"],
+    }
+    item.save(update_fields=["last_sync_at", "last_error", "last_sync_summary", "updated_at"])
     return SyncResult(
         items=1,
         accounts=len(account_result.accounts),
@@ -736,4 +1228,8 @@ def sync_item(item: PluggyItem, *, user=None) -> SyncResult:
         transactions_existing=totals["existing"],
         pending_skipped=totals["pending"],
         conflicts=totals["conflicts"],
+        account_reviews_pending=account_result.reviews_pending,
+        duplicate_reviews_pending=totals["duplicate_reviews"],
+        duplicates_quarantined=totals["duplicates_quarantined"],
     )
+

@@ -193,3 +193,22 @@ e quando a proveniência Pluggy está comprovada, ficaram vazios e não possuem 
 outras integrações ou vínculos que precisem ser preservados.
 
 Toda exclusão exige a senha atual e a confirmação textual `EXCLUIR`.
+
+
+## Etapa 10.9.6 — deduplicação, contas similares e identidade
+
+A cópia do Pluggy agora participa do mesmo processo de revisão financeira das importações OFX/PDF.
+
+- O sistema não usa FITID como única evidência entre fontes diferentes. Ele compara conta, banco, natureza, valor, data, descrição e contraparte para gerar uma revisão de duplicidade.
+- Duplicidades muito prováveis criadas por uma nova importação podem ficar fora dos totais até decisão do usuário, sem exclusão física do lançamento.
+- `paymentData.receiver` é priorizado em saídas e `paymentData.payer` em entradas para vincular Pessoas/Contrapartes. CPF/CNPJ completo, quando presente, tem prioridade sobre variações de nome.
+- `Account.owner` e `Account.taxNumber` alimentam Titular/CPF-CNPJ da conta local. O produto `Identity`, quando disponível, é mantido como snapshot no Item.
+- Para contas bancárias, `bankData.transferNumber` é usado quando disponível; se estiver ausente, o sistema usa `Account.number` como fallback.
+- Números com zeros à esquerda são normalizados para procurar contas semelhantes. Quando a similaridade é forte, a importação para aquela conta aguarda decisão entre **Usar conta existente** e **Manter/criar conta separada**.
+- Depois da atualização, use **Movimentações → Analisar duplicidades** para fazer o pente fino do histórico já existente.
+
+## Diagnóstico de Item remoto (10.9.6.2)
+
+Quando a Pluggy devolver HTTP 404, o Financeiro OFX passa a informar em qual etapa a falha ocorreu: consulta do Item, listagem de contas ou listagem de transações. Os dados já copiados localmente não são apagados por uma falha remota.
+
+Na revisão de contas semelhantes, a interface preserva explicitamente qual botão disparou o formulário antes de ativar o estado de carregamento. Isso evita perder a decisão `use_existing`/`keep_separate` ao desabilitar os botões durante o envio.

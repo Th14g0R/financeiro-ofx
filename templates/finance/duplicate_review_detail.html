@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% load finance_extras %}
+{% block title %}Decidir duplicidade{% endblock %}
+{% block content %}
+<div class="container-fluid px-4 py-4">
+  <div class="mb-4">
+    <h1 class="h3 mb-1">Comparar movimentações</h1>
+    <p class="text-secondary mb-0">
+      {{ review.get_classification_display }} · confiança {{ review.confidence }}%. Nenhum valor/data é alterado automaticamente pela mesclagem.
+    </p>
+  </div>
+
+  <div class="row g-4 mb-4">
+    <div class="col-12 col-xl-6">
+      <div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <div class="small text-secondary">A · movimentação #{{ review.first_transaction.pk }}</div>
+        <h2 class="h5">{{ review.first_transaction.account.bank.name }} · {{ review.first_transaction.account.nickname }}</h2>
+        <dl class="row small mb-0">
+          <dt class="col-4">Data</dt><dd class="col-8">{{ review.first_transaction.posted_at|date:"d/m/Y H:i:s" }}</dd>
+          <dt class="col-4">Origem</dt><dd class="col-8">{{ review.first_transaction.get_source_type_display }}</dd>
+          <dt class="col-4">Valor</dt><dd class="col-8" data-sensitive-value>{{ review.first_transaction.signed_amount|brl_signed }}</dd>
+          <dt class="col-4">Tipo</dt><dd class="col-8">{{ review.first_transaction.get_transaction_type_display }}</dd>
+          <dt class="col-4">Pessoa</dt><dd class="col-8">{% if review.first_transaction.counterparty %}{{ review.first_transaction.counterparty.display_name }}{% else %}—{% endif %}</dd>
+          <dt class="col-4">Descrição</dt><dd class="col-8">{{ review.first_transaction.raw_description }}</dd>
+          <dt class="col-4">Documento</dt><dd class="col-8">{{ review.first_transaction.document|default:"—" }}</dd>
+          <dt class="col-4">Referência</dt><dd class="col-8 text-break">{{ review.first_transaction.reference|default:"—" }}</dd>
+          <dt class="col-4">FITID</dt><dd class="col-8 text-break">{{ review.first_transaction.fitid|default:"—" }}</dd>
+        </dl>
+      </div></div>
+    </div>
+    <div class="col-12 col-xl-6">
+      <div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <div class="small text-secondary">B · movimentação #{{ review.second_transaction.pk }}</div>
+        <h2 class="h5">{{ review.second_transaction.account.bank.name }} · {{ review.second_transaction.account.nickname }}</h2>
+        <dl class="row small mb-0">
+          <dt class="col-4">Data</dt><dd class="col-8">{{ review.second_transaction.posted_at|date:"d/m/Y H:i:s" }}</dd>
+          <dt class="col-4">Origem</dt><dd class="col-8">{{ review.second_transaction.get_source_type_display }}</dd>
+          <dt class="col-4">Valor</dt><dd class="col-8" data-sensitive-value>{{ review.second_transaction.signed_amount|brl_signed }}</dd>
+          <dt class="col-4">Tipo</dt><dd class="col-8">{{ review.second_transaction.get_transaction_type_display }}</dd>
+          <dt class="col-4">Pessoa</dt><dd class="col-8">{% if review.second_transaction.counterparty %}{{ review.second_transaction.counterparty.display_name }}{% else %}—{% endif %}</dd>
+          <dt class="col-4">Descrição</dt><dd class="col-8">{{ review.second_transaction.raw_description }}</dd>
+          <dt class="col-4">Documento</dt><dd class="col-8">{{ review.second_transaction.document|default:"—" }}</dd>
+          <dt class="col-4">Referência</dt><dd class="col-8 text-break">{{ review.second_transaction.reference|default:"—" }}</dd>
+          <dt class="col-4">FITID</dt><dd class="col-8 text-break">{{ review.second_transaction.fitid|default:"—" }}</dd>
+        </dl>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="alert alert-info">
+    <strong>Mesclar</strong> mantém uma movimentação como canônica e copia para ela metadados ausentes/mais ricos da outra (pessoa, documento, referência, categoria e descrição), preservando a origem da descartada em dados de auditoria. A outra permanece registrada, mas marcada para não participar de totais e gráficos.
+  </div>
+
+  {% if review.match_reasons %}<div class="alert alert-warning"><strong>Evidências:</strong> {{ review.match_reasons|join:", " }}</div>{% endif %}
+
+  <div class="card border-0 shadow-sm"><div class="card-body">
+    <form method="post" class="row g-3">
+      {% csrf_token %}
+      {% if form.non_field_errors %}<div class="col-12 alert alert-danger">{{ form.non_field_errors }}</div>{% endif %}
+      <div class="col-12 col-lg-7">
+        <label class="form-label" for="{{ form.action.id_for_label }}">{{ form.action.label }}</label>
+        {{ form.action }}
+        {% for error in form.action.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="col-12 col-lg-5">
+        <label class="form-label" for="{{ form.current_password.id_for_label }}">{{ form.current_password.label }}</label>
+        {{ form.current_password }}
+        <div class="form-text">{{ form.current_password.help_text }}</div>
+        {% for error in form.current_password.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+      </div>
+      <div class="col-12 d-flex gap-2">
+        <button class="btn btn-primary" type="submit">Aplicar decisão</button>
+        <a class="btn btn-outline-secondary" href="{% url 'finance:duplicate-review-list' %}">Cancelar</a>
+      </div>
+    </form>
+  </div></div>
+</div>
+{% endblock %}

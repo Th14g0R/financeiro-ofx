@@ -15,6 +15,7 @@ from .pluggy_views import pluggy_connect_token
 from .pluggy_views import pluggy_map_account
 from .pluggy_views import pluggy_overview
 from .pluggy_views import pluggy_refresh_item
+from .pluggy_views import pluggy_resolve_account_similarity
 from .pluggy_views import pluggy_register_item
 from .pluggy_views import pluggy_sync_item
 from .pluggy_views import pluggy_test
@@ -45,6 +46,11 @@ urlpatterns = [
     path("pluggy/conta/<int:pk>/excluir-dados/", pluggy_cleanup_account, name="pluggy-cleanup-account"),
     path("pluggy/item/<int:pk>/solicitar-atualizacao/", pluggy_trigger_update, name="pluggy-trigger-update"),
     path("pluggy/conta/<int:pk>/vincular/", pluggy_map_account, name="pluggy-map-account"),
+    path(
+        "pluggy/conta/<int:pk>/resolver-similaridade/",
+        pluggy_resolve_account_similarity,
+        name="pluggy-resolve-account-similarity",
+    ),
     path(
         "",
         integration_list,

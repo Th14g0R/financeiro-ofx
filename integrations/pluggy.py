@@ -55,7 +55,7 @@ def _request_json(
     headers = {
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "Financeiro-OFX/10.9.5",
+        "User-Agent": "Financeiro-OFX/10.9.6.2",
     }
     if api_key:
         headers["X-API-KEY"] = api_key
@@ -212,6 +212,27 @@ def retrieve_item(configuration: PluggyConfiguration, item_id: str) -> dict[str,
     if not isinstance(payload, dict):
         raise PluggyApiError("Resposta inesperada ao consultar a conexão Pluggy.")
     return payload
+
+
+def retrieve_identity(
+    configuration: PluggyConfiguration,
+    item_id: str,
+) -> dict[str, Any]:
+    api_key = authenticate(configuration)
+    try:
+        payload = _request_json(
+            "GET",
+            "/identity",
+            api_key=api_key,
+            params={"itemId": item_id},
+        )
+    except PluggyApiError as exc:
+        # Identity is not covered by every institution/product. A 404 means
+        # simply that this Item has no Identity product available.
+        if exc.status_code == 404:
+            return {}
+        raise
+    return payload if isinstance(payload, dict) else {}
 
 
 def trigger_item_update(configuration: PluggyConfiguration, item_id: str) -> dict[str, Any]:

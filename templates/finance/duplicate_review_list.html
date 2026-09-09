@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% load finance_extras query_extras %}
+{% block title %}Revisar duplicidades{% endblock %}
+{% block content %}
+<div class="container-fluid px-4 py-4">
+  <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+    <div>
+      <h1 class="h3 mb-1">Revisão de duplicidades</h1>
+      <p class="text-secondary mb-0">
+        Compara movimentações de OFX, PDF, API/Pluggy e outras origens sem apagar o histórico de auditoria.
+      </p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <form method="post" action="{% url 'finance:duplicate-analyze' %}">
+        {% csrf_token %}
+        <button class="btn btn-warning" type="submit">Analisar novamente</button>
+      </form>
+      <a class="btn btn-outline-secondary" href="{% url 'finance:transaction-list' %}">Voltar às movimentações</a>
+    </div>
+  </div>
+
+  <div class="card border-0 shadow-sm mb-4">
+    <div class="card-body d-flex flex-wrap justify-content-between gap-3 align-items-center">
+      <div><strong>{{ pending_count }}</strong> par(es) pendente(s) de decisão.</div>
+      <div class="btn-group" role="group">
+        <a class="btn btn-sm {% if status_filter == 'pending' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?status=pending">Pendentes</a>
+        <a class="btn btn-sm {% if status_filter == 'reviewed' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?status=reviewed">Revisadas</a>
+        <a class="btn btn-sm {% if status_filter == 'all' %}btn-primary{% else %}btn-outline-primary{% endif %}" href="?status=all">Todas</a>
+      </div>
+    </div>
+  </div>
+
+  {% for review in reviews %}
+  <div class="card border-0 shadow-sm mb-3">
+    <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between gap-2 align-items-lg-center">
+      <div>
+        <span class="badge {% if review.classification == 'EXACT' %}text-bg-danger{% else %}text-bg-warning{% endif %}">
+          {{ review.get_classification_display }} · {{ review.confidence }}%
+        </span>
+        <span class="ms-2 small text-secondary">{{ review.get_status_display }}</span>
+      </div>
+      <a class="btn btn-sm btn-outline-primary" href="{% url 'finance:duplicate-review-detail' review.pk %}">Comparar e decidir</a>
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-12 col-xl-6">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-secondary">Movimentação A · #{{ review.first_transaction.pk }}</div>
+            <div class="fw-semibold">{{ review.first_transaction.account.bank.name }} · {{ review.first_transaction.account.nickname }}</div>
+            <div>{{ review.first_transaction.posted_at|date:"d/m/Y H:i" }} · {{ review.first_transaction.get_source_type_display }}</div>
+            <div class="mt-2">{{ review.first_transaction.raw_description }}</div>
+            {% if review.first_transaction.counterparty %}<div class="small">Pessoa: {{ review.first_transaction.counterparty.display_name }}</div>{% endif %}
+            <div class="mt-2 fw-semibold" data-sensitive-value>{{ review.first_transaction.signed_amount|brl_signed }}</div>
+            {% if review.first_transaction.fitid %}<div class="small text-secondary text-break">FITID: {{ review.first_transaction.fitid }}</div>{% endif %}
+          </div>
+        </div>
+        <div class="col-12 col-xl-6">
+          <div class="border rounded p-3 h-100">
+            <div class="small text-secondary">Movimentação B · #{{ review.second_transaction.pk }}</div>
+            <div class="fw-semibold">{{ review.second_transaction.account.bank.name }} · {{ review.second_transaction.account.nickname }}</div>
+            <div>{{ review.second_transaction.posted_at|date:"d/m/Y H:i" }} · {{ review.second_transaction.get_source_type_display }}</div>
+            <div class="mt-2">{{ review.second_transaction.raw_description }}</div>
+            {% if review.second_transaction.counterparty %}<div class="small">Pessoa: {{ review.second_transaction.counterparty.display_name }}</div>{% endif %}
+            <div class="mt-2 fw-semibold" data-sensitive-value>{{ review.second_transaction.signed_amount|brl_signed }}</div>
+            {% if review.second_transaction.fitid %}<div class="small text-secondary text-break">FITID: {{ review.second_transaction.fitid }}</div>{% endif %}
+          </div>
+        </div>
+      </div>
+      {% if review.match_reasons %}
+      <div class="small text-secondary mt-3"><strong>Evidências:</strong> {{ review.match_reasons|join:", " }}</div>
+      {% endif %}
+    </div>
+  </div>
+  {% empty %}
+  <div class="card border-0 shadow-sm"><div class="card-body text-center py-5 text-secondary">Nenhuma duplicidade encontrada neste filtro.</div></div>
+  {% endfor %}
+
+  {% if is_paginated %}
+  <nav class="mt-4" aria-label="Paginação"><ul class="pagination justify-content-end">
+    {% if page_obj.has_previous %}<li class="page-item"><a class="page-link" href="{% querystring page=page_obj.previous_page_number %}">Anterior</a></li>{% endif %}
+    <li class="page-item disabled"><span class="page-link">Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}</span></li>
+    {% if page_obj.has_next %}<li class="page-item"><a class="page-link" href="{% querystring page=page_obj.next_page_number %}">Próxima</a></li>{% endif %}
+  </ul></nav>
+  {% endif %}
+</div>
+{% endblock %}

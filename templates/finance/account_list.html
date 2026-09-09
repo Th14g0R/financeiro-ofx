@@ -128,6 +128,7 @@
                         <th><a class="table-sort-link" href="{% sort_url 'number' %}">Conta <span class="sort-icon">{% sort_icon 'number' %}</span></a></th>
                         <th><a class="table-sort-link" href="{% sort_url 'type' %}">Tipo <span class="sort-icon">{% sort_icon 'type' %}</span></a></th>
                         <th><a class="table-sort-link" href="{% sort_url 'ofx' %}">ACCTID OFX <span class="sort-icon">{% sort_icon 'ofx' %}</span></a></th>
+                        <th>Titular</th>
                         <th><a class="table-sort-link" href="{% sort_url 'ownership' %}">Titularidade <span class="sort-icon">{% sort_icon 'ownership' %}</span></a></th>
                         <th><a class="table-sort-link" href="{% sort_url 'status' %}">Situação <span class="sort-icon">{% sort_icon 'status' %}</span></a></th>
                         <th class="text-end">Ações</th>
@@ -159,6 +160,11 @@
 
                         <td>
                             {{ account.ofx_account_id|default:"—" }}
+                        </td>
+
+                        <td>
+                            <div>{{ account.holder_name|default:"—" }}</div>
+                            {% if account.holder_tax_id %}<div class="small text-secondary">{{ account.holder_tax_id }}</div>{% endif %}
                         </td>
 
                         <td>
@@ -210,7 +216,7 @@
                     </tr>
                 {% empty %}
                     <tr>
-                        <td colspan="9" class="text-center py-5 text-secondary">
+                        <td colspan="10" class="text-center py-5 text-secondary">
                             Nenhuma conta encontrada.
                         </td>
                     </tr>

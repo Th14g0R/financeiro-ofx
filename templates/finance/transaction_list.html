@@ -14,7 +14,16 @@
             </p>
         </div>
 
-        <div class="d-flex gap-2">
+        <div class="d-flex flex-wrap gap-2">
+            <form method="post" action="{% url 'finance:duplicate-analyze' %}">
+                {% csrf_token %}
+                <button class="btn btn-outline-warning" type="submit">
+                    Analisar duplicidades
+                </button>
+            </form>
+            <a href="{% url 'finance:duplicate-review-list' %}" class="btn btn-outline-warning">
+                Revisar duplicidades{% if pending_duplicate_count %} ({{ pending_duplicate_count }}){% endif %}
+            </a>
             <a
                 href="{% url 'finance:internal-transfer-list' %}"
                 class="btn btn-outline-primary"
@@ -166,6 +175,15 @@
                     >
                 </div>
 
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="visibility" class="form-label">Situação contábil</label>
+                    <select id="visibility" name="visibility" class="form-select">
+                        <option value="active" {% if visibility_filter == "active" %}selected{% endif %}>Consideradas nos totais</option>
+                        <option value="ignored" {% if visibility_filter == "ignored" %}selected{% endif %}>Desconsideradas como duplicadas</option>
+                        <option value="all" {% if visibility_filter == "all" %}selected{% endif %}>Todas</option>
+                    </select>
+                </div>
+
                 <div class="col-12 col-md-6 col-xl-2 d-grid">
                     <button class="btn btn-outline-secondary" type="submit">
                         Filtrar
@@ -182,6 +200,34 @@
                 </div>
 
             </form>
+        </div>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-12 col-md-3">
+            <div class="card border-0 shadow-sm h-100"><div class="card-body">
+                <div class="small text-secondary">Entradas do período/filtro</div>
+                <div class="h4 mb-0" data-sensitive-value>{{ filtered_credit|brl }}</div>
+            </div></div>
+        </div>
+        <div class="col-12 col-md-3">
+            <div class="card border-0 shadow-sm h-100"><div class="card-body">
+                <div class="small text-secondary">Saídas do período/filtro</div>
+                <div class="h4 mb-0" data-sensitive-value>{{ filtered_debit|brl }}</div>
+            </div></div>
+        </div>
+        <div class="col-12 col-md-3">
+            <div class="card border-0 shadow-sm h-100"><div class="card-body">
+                <div class="small text-secondary">Saldo líquido do período/filtro</div>
+                <div class="h4 mb-0" data-sensitive-value>{{ filtered_net|brl_signed }}</div>
+            </div></div>
+        </div>
+        <div class="col-12 col-md-3">
+            <div class="card border-0 shadow-sm h-100"><div class="card-body">
+                <div class="small text-secondary">Movimentações consideradas</div>
+                <div class="h4 mb-0">{{ filtered_count }}</div>
+                {% if ignored_in_filter_count %}<div class="small text-warning">{{ ignored_in_filter_count }} desconsiderada(s)</div>{% endif %}
+            </div></div>
         </div>
     </div>
 
@@ -256,6 +302,11 @@
                         </td>
 
                         <td>
+                            {% if transaction.is_financially_ignored %}
+                                <span class="badge text-bg-secondary mb-1">Desconsiderada nos totais</span><br>
+                            {% elif transaction.has_pending_duplicate %}
+                                <span class="badge text-bg-warning mb-1">Possível duplicidade</span><br>
+                            {% endif %}
                             {% if transaction.is_internal_transfer %}
                                 <span class="badge text-bg-info">
                                     Transferência interna
@@ -279,7 +330,9 @@
                         </td>
 
                         <td class="text-end">
-                            {% if transaction.source_type == "MANUAL" %}
+                            {% if transaction.is_financially_ignored %}
+                                <span class="small text-secondary">Auditável · não contabilizada</span>
+                            {% elif transaction.source_type == "MANUAL" %}
                                 <a
                                     href="{% url 'finance:transaction-update' transaction.pk %}"
                                     class="btn btn-sm btn-outline-primary"
