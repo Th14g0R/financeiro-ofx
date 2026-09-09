@@ -9,6 +9,7 @@ from .views import commit_import_item
 from .views import create_statement_account
 from .views import import_history
 from .views import import_upload
+from .views import ofx_cleanup
 from .views import toggle_import_item_exclusion
 
 
@@ -25,6 +26,11 @@ urlpatterns = [
         "history/",
         import_history,
         name="history",
+    ),
+    path(
+        "ofx-cleanup/",
+        ofx_cleanup,
+        name="ofx-cleanup",
     ),
     path(
         "<int:pk>/",

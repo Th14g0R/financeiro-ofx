@@ -492,3 +492,41 @@ class DuplicateReviewForm(forms.Form):
             ):
                 self.add_error("current_password", "A senha atual não confere.")
         return cleaned
+
+
+class DuplicateBulkReviewForm(forms.Form):
+    action = forms.ChoiceField(
+        label="Decisão em lote",
+        choices=DuplicateReviewForm.ACTIONS,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    current_password = forms.CharField(
+        label="Senha atual",
+        strip=False,
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={
+                "class": "form-control",
+                "autocomplete": "current-password",
+                "placeholder": "Senha atual para confirmar",
+            },
+        ),
+    )
+    apply_all_filtered = forms.BooleanField(
+        label="Aplicar a todos os resultados filtrados",
+        required=False,
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_current_password(self):
+        password = self.cleaned_data.get("current_password") or ""
+        if (
+            self.user is None
+            or not self.user.is_authenticated
+            or not self.user.check_password(password)
+        ):
+            raise forms.ValidationError("A senha atual não confere.")
+        return password

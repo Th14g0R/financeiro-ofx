@@ -14,7 +14,7 @@
 
             <p class="text-secondary mb-0">
                 {{ batch.created_at|date:"d/m/Y H:i" }}
-                · {{ batch.get_status_display }}
+                · {% if batch.cleanup_archived_at %}Arquivado após limpeza OFX{% else %}{{ batch.get_status_display }}{% endif %}
             </p>
         </div>
 
@@ -26,12 +26,14 @@
                 Histórico
             </a>
 
+            {% if not batch.cleanup_archived_at %}
             <a
                 href="{% url 'imports:batch-edit' batch.pk %}"
                 class="btn btn-outline-primary"
             >
                 Editar / reprocessar
             </a>
+            {% endif %}
 
             <a
                 href="{% url 'imports:batch-delete' batch.pk %}"
@@ -58,6 +60,13 @@
             {% endif %}
         </div>
     </div>
+
+    {% if batch.cleanup_archived_at %}
+        <div class="alert alert-secondary">
+            <strong>Lote arquivado após limpeza OFX em {{ batch.cleanup_archived_at|date:"d/m/Y H:i" }}.</strong>
+            Os efeitos financeiros foram removidos/desfeitos e os arquivos originais foram preservados para auditoria. Este lote não pode voltar a gravar movimentações.
+        </div>
+    {% endif %}
 
     <div class="row g-3 mb-4">
 
@@ -154,7 +163,7 @@
         </div>
     {% endif %}
 
-    {% if counts.divergent_pending %}
+    {% if counts.divergent_pending and not batch.cleanup_archived_at %}
         <div class="card border-0 shadow-sm mb-4">
             <div class="card-header bg-white py-3">
                 <div class="fw-semibold">

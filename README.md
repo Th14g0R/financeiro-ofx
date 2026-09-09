@@ -1,7 +1,39 @@
-# Financeiro OFX — Etapa 10.9.6.2
+# Financeiro OFX — Etapa 10.9.8
 
 
 
+
+
+
+
+## Etapa 10.9.8 — limpeza assistida de OFX preservando Pluggy
+
+- Nova tela **Importações > Limpeza OFX** para remover efeitos financeiros de OFX/QFX sem apagar os arquivos originais.
+- O modo seguro prioriza movimentações Pluggy equivalentes (confiança configurável), mantém a data/hora do Pluggy e aproveita Pessoa, categoria, documento e referência úteis do OFX.
+- Decisões anteriores que haviam desconsiderado o Pluggy em favor do OFX são revertidas quando o equivalente Pluggy é selecionado como canônico.
+- Atualizações feitas por OFX sobre registros preexistentes usam desfazer em três vias (`before` / `after` / estado atual): campos ainda iguais ao OFX voltam ao valor anterior, enquanto alterações posteriores são preservadas.
+- OFX únicos não são excluídos por padrão; há opção explícita e protegida por senha para removê-los.
+- OFX criados e alterados depois, sem equivalente Pluggy seguro, permanecem preservados para revisão manual e a tela mostra quais campos mudaram.
+- Lotes totalmente limpos ficam **arquivados após limpeza OFX**: efeitos financeiros removidos, arquivos originais preservados e regravação bloqueada.
+- Operação protegida por confirmação `LIMPAR OFX`, senha do usuário e `transaction.atomic()`.
+
+## Etapa 10.9.7 — filtros e decisões em lote de duplicidades
+
+A revisão de duplicidades foi preparada para bases com centenas ou milhares de pares pendentes:
+
+- filtros por percentual mínimo/máximo de similaridade, classificação, banco, origem A/B e texto;
+- ordenação por maior/menor similaridade ou data da análise;
+- paginação configurável em 30, 50, 100 ou 200 pares;
+- atalhos para 100%, 95–99%, 90–94% e até 89%;
+- seleção individual ou de todos os pares da página;
+- decisão em lote para manter ambas, manter A/B ou mesclar em A/B;
+- opção explícita para aplicar a decisão a **todos os resultados pendentes do filtro**, inclusive fora da página atual;
+- senha do usuário logado exigida uma única vez por operação em lote;
+- toda a operação em lote é atômica: se uma decisão falhar, nenhuma alteração parcial do lote é mantida;
+- pares que compartilham a mesma movimentação com outro par da seleção são deixados pendentes por segurança, evitando decisões contraditórias em cascata;
+- o resultado informa quantos pares foram aplicados e quantos permaneceram pendentes por sobreposição.
+
+Não há migration nova nesta etapa.
 
 ## Hotfix 10.9.6.2 — decisão de conta e diagnóstico Pluggy
 

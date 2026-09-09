@@ -1,4 +1,6 @@
+from collections import Counter
 from datetime import date
+from urllib.parse import urlencode
 from decimal import Decimal
 
 from django.contrib import messages
@@ -31,6 +33,7 @@ from .forms import CounterpartyAliasForm
 from .forms import CounterpartyMergeConfirmForm
 from .forms import CounterpartyMergeSelectionForm
 from .forms import TransactionForm
+from .forms import DuplicateBulkReviewForm
 from .forms import DuplicateReviewForm
 from .models import Account
 from .models import Bank
@@ -582,7 +585,131 @@ def duplicate_analyze(request):
 
 @login_required
 def duplicate_review_list(request):
-    status = (request.GET.get("status") or "pending").strip()
+    filters = _duplicate_review_filter_state(request.GET)
+    queryset = _duplicate_review_queryset(filters)
+    filtered_count = queryset.count()
+    bulk_filtered_count = queryset.filter(
+        status=TransactionDuplicateReview.Status.PENDING
+    ).count()
+    paginator = Paginator(queryset, filters["page_size"])
+    page_obj = paginator.get_page(request.GET.get("page"))
+    pending_count = TransactionDuplicateReview.objects.filter(
+        status=TransactionDuplicateReview.Status.PENDING
+    ).count()
+    return render(
+        request,
+        "finance/duplicate_review_list.html",
+        {
+            "reviews": page_obj.object_list,
+            "page_obj": page_obj,
+            "is_paginated": page_obj.has_other_pages(),
+            "status_filter": filters["status"],
+            "pending_count": pending_count,
+            "filtered_count": filtered_count,
+            "bulk_filtered_count": bulk_filtered_count,
+            "duplicate_filters": filters,
+            "banks": Bank.objects.order_by("name"),
+            "source_filter_choices": _duplicate_source_filter_choices(),
+            "classification_choices": TransactionDuplicateReview.Classification.choices,
+            "bulk_action_choices": DuplicateReviewForm.ACTIONS,
+        },
+    )
+
+
+def _duplicate_source_filter_choices():
+    return [
+        ("", "Todas"),
+        ("PLUGGY", "Pluggy"),
+        (Transaction.SourceType.OFX, "OFX/QFX"),
+        (Transaction.SourceType.PDF, "PDF"),
+        ("API_OTHER", "API (exceto Pluggy)"),
+        (Transaction.SourceType.IMPORT, "Importação"),
+        (Transaction.SourceType.MANUAL, "Manual"),
+    ]
+
+
+def _duplicate_bounded_int(value, *, minimum, maximum, default=None):
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, min(maximum, parsed))
+
+
+def _duplicate_review_filter_state(params):
+    status = (params.get("status") or "pending").strip().lower()
+    if status not in {"pending", "reviewed", "all"}:
+        status = "pending"
+
+    classification = (params.get("classification") or "").strip().upper()
+    valid_classifications = {value for value, _label in TransactionDuplicateReview.Classification.choices}
+    if classification not in valid_classifications:
+        classification = ""
+
+    confidence_min = _duplicate_bounded_int(
+        params.get("confidence_min"), minimum=0, maximum=100, default=None
+    )
+    confidence_max = _duplicate_bounded_int(
+        params.get("confidence_max"), minimum=0, maximum=100, default=None
+    )
+
+    try:
+        bank_id = int(params.get("bank") or 0) or None
+    except (TypeError, ValueError):
+        bank_id = None
+
+    valid_sources = {value for value, _label in _duplicate_source_filter_choices()}
+    source_a = (params.get("source_a") or "").strip().upper()
+    source_b = (params.get("source_b") or "").strip().upper()
+    if source_a not in valid_sources:
+        source_a = ""
+    if source_b not in valid_sources:
+        source_b = ""
+
+    sort = (params.get("sort") or "confidence_desc").strip().lower()
+    if sort not in {"confidence_desc", "confidence_asc", "newest", "oldest"}:
+        sort = "confidence_desc"
+
+    page_size = _duplicate_bounded_int(
+        params.get("page_size"), minimum=30, maximum=200, default=30
+    )
+    if page_size not in {30, 50, 100, 200}:
+        page_size = 30
+
+    return {
+        "status": status,
+        "classification": classification,
+        "confidence_min": confidence_min,
+        "confidence_max": confidence_max,
+        "bank_id": bank_id,
+        "source_a": source_a,
+        "source_b": source_b,
+        "sort": sort,
+        "page_size": page_size,
+        "q": (params.get("q") or "").strip(),
+    }
+
+
+def _duplicate_source_q(path: str, source: str):
+    source_path = f"{path}__source_type"
+    fitid_path = f"{path}__fitid__istartswith"
+    if source == "PLUGGY":
+        return Q(**{source_path: Transaction.SourceType.API}) & (
+            Q(**{fitid_path: "PLUGGY:"})
+            | Q(**{fitid_path: "PLUGGY-PROVIDER:"})
+        )
+    if source == "API_OTHER":
+        return (
+            Q(**{source_path: Transaction.SourceType.API})
+            & ~Q(**{fitid_path: "PLUGGY:"})
+            & ~Q(**{fitid_path: "PLUGGY-PROVIDER:"})
+        )
+    if source:
+        return Q(**{source_path: source})
+    return Q()
+
+
+def _duplicate_review_queryset(filters):
     queryset = TransactionDuplicateReview.objects.select_related(
         "first_transaction",
         "first_transaction__account",
@@ -594,25 +721,191 @@ def duplicate_review_list(request):
         "second_transaction__counterparty",
         "reviewed_by",
     )
+
+    status = filters["status"]
     if status == "pending":
         queryset = queryset.filter(status=TransactionDuplicateReview.Status.PENDING)
     elif status == "reviewed":
         queryset = queryset.exclude(status=TransactionDuplicateReview.Status.PENDING)
-    paginator = Paginator(queryset, 30)
-    page_obj = paginator.get_page(request.GET.get("page"))
-    return render(
-        request,
-        "finance/duplicate_review_list.html",
-        {
-            "reviews": page_obj.object_list,
-            "page_obj": page_obj,
-            "is_paginated": page_obj.has_other_pages(),
-            "status_filter": status,
-            "pending_count": TransactionDuplicateReview.objects.filter(
-                status=TransactionDuplicateReview.Status.PENDING
-            ).count(),
-        },
+
+    if filters["classification"]:
+        queryset = queryset.filter(classification=filters["classification"])
+    if filters["confidence_min"] is not None:
+        queryset = queryset.filter(confidence__gte=filters["confidence_min"])
+    if filters["confidence_max"] is not None:
+        queryset = queryset.filter(confidence__lte=filters["confidence_max"])
+    if filters["bank_id"]:
+        queryset = queryset.filter(
+            Q(first_transaction__account__bank_id=filters["bank_id"])
+            | Q(second_transaction__account__bank_id=filters["bank_id"])
+        )
+    if filters["source_a"]:
+        queryset = queryset.filter(_duplicate_source_q("first_transaction", filters["source_a"]))
+    if filters["source_b"]:
+        queryset = queryset.filter(_duplicate_source_q("second_transaction", filters["source_b"]))
+
+    query = filters["q"]
+    if query:
+        queryset = queryset.filter(
+            Q(first_transaction__raw_description__icontains=query)
+            | Q(second_transaction__raw_description__icontains=query)
+            | Q(first_transaction__fitid__icontains=query)
+            | Q(second_transaction__fitid__icontains=query)
+            | Q(first_transaction__counterparty__display_name__icontains=query)
+            | Q(second_transaction__counterparty__display_name__icontains=query)
+        )
+
+    ordering = {
+        "confidence_desc": ("-confidence", "-created_at", "-pk"),
+        "confidence_asc": ("confidence", "-created_at", "-pk"),
+        "newest": ("-created_at", "-confidence", "-pk"),
+        "oldest": ("created_at", "-confidence", "pk"),
+    }[filters["sort"]]
+    return queryset.order_by(*ordering)
+
+
+def _duplicate_review_redirect_url(params):
+    filters = _duplicate_review_filter_state(params)
+    query = {}
+    for key in (
+        "status",
+        "classification",
+        "confidence_min",
+        "confidence_max",
+        "source_a",
+        "source_b",
+        "sort",
+        "page_size",
+        "q",
+    ):
+        value = filters[key]
+        if value not in (None, ""):
+            query[key] = value
+    if filters["bank_id"]:
+        query["bank"] = filters["bank_id"]
+    page = _duplicate_bounded_int(params.get("return_page"), minimum=1, maximum=999999, default=None)
+    if page:
+        query["page"] = page
+    base = reverse("finance:duplicate-review-list")
+    return f"{base}?{urlencode(query)}" if query else base
+
+
+def _duplicate_review_form_error_message(form):
+    messages_list = []
+    for field_errors in form.errors.values():
+        messages_list.extend(str(error) for error in field_errors)
+    return " ".join(messages_list) or "Não foi possível validar a decisão em lote."
+
+
+@login_required
+@require_POST
+def duplicate_review_bulk(request):
+    return_url = _duplicate_review_redirect_url(request.POST)
+    form = DuplicateBulkReviewForm(request.POST, user=request.user)
+    if not form.is_valid():
+        messages.error(request, _duplicate_review_form_error_message(form))
+        return redirect(return_url)
+
+    filters = _duplicate_review_filter_state(request.POST)
+    filters["status"] = "pending"
+    eligible = _duplicate_review_queryset(filters).filter(
+        status=TransactionDuplicateReview.Status.PENDING
     )
+
+    if form.cleaned_data["apply_all_filtered"]:
+        candidates = list(
+            eligible.values_list("pk", "first_transaction_id", "second_transaction_id")
+        )
+        selection_label = "resultados filtrados"
+    else:
+        raw_ids = request.POST.getlist("review_ids")
+        selected_ids = []
+        for raw_id in raw_ids:
+            try:
+                selected_ids.append(int(raw_id))
+            except (TypeError, ValueError):
+                continue
+        if not selected_ids:
+            messages.warning(request, "Selecione ao menos uma duplicidade para aplicar a decisão em lote.")
+            return redirect(return_url)
+        candidates = list(
+            eligible.filter(pk__in=selected_ids).values_list(
+                "pk", "first_transaction_id", "second_transaction_id"
+            )
+        )
+        selection_label = "pares selecionados"
+
+    if not candidates:
+        messages.warning(
+            request,
+            "Nenhuma duplicidade pendente corresponde à seleção e aos filtros atuais.",
+        )
+        return redirect(return_url)
+
+    transaction_counts = Counter(
+        transaction_id
+        for _review_id, first_id, second_id in candidates
+        for transaction_id in (first_id, second_id)
+    )
+    overlapping_transaction_ids = {
+        transaction_id for transaction_id, count in transaction_counts.items() if count > 1
+    }
+    safe_ids = [
+        review_id
+        for review_id, first_id, second_id in candidates
+        if first_id not in overlapping_transaction_ids
+        and second_id not in overlapping_transaction_ids
+    ]
+    overlap_skipped = len(candidates) - len(safe_ids)
+
+    if not safe_ids:
+        messages.warning(
+            request,
+            "Nenhum par foi alterado porque todos compartilham movimentações com outro par da mesma seleção. "
+            "Esses casos permanecem pendentes para evitar decisões em lote contraditórias.",
+        )
+        return redirect(return_url)
+
+    action = form.cleaned_data["action"]
+    applied_review_ids = []
+    try:
+        with db_transaction.atomic():
+            reviews = list(
+                TransactionDuplicateReview.objects.select_for_update()
+                .filter(pk__in=safe_ids, status=TransactionDuplicateReview.Status.PENDING)
+                .order_by("pk")
+            )
+            if len(reviews) != len(safe_ids):
+                raise ValueError(
+                    "A lista de duplicidades mudou enquanto a operação era preparada. "
+                    "Nenhuma decisão foi aplicada; atualize a página e tente novamente."
+                )
+            for review in reviews:
+                review_duplicate_pair(review, action=action, user=request.user)
+                applied_review_ids.append(review.pk)
+    except (IntegrityError, ValueError) as exc:
+        messages.error(
+            request,
+            f"A decisão em lote foi cancelada sem alterações parciais: {exc}",
+        )
+        return redirect(return_url)
+
+    request.audit_detail = {
+        "bulk_duplicate_review": True,
+        "decision": action,
+        "applied_count": len(applied_review_ids),
+        "overlap_skipped": overlap_skipped,
+        "selection": selection_label,
+        "review_ids": applied_review_ids[:200],
+    }
+    message = f"Decisão em lote aplicada a {len(applied_review_ids)} par(es)."
+    if overlap_skipped:
+        message += (
+            f" {overlap_skipped} par(es) ficaram pendentes porque compartilham movimentações "
+            "com outro par da mesma seleção e precisam de revisão separada."
+        )
+    messages.success(request, message)
+    return redirect(return_url)
 
 
 @login_required

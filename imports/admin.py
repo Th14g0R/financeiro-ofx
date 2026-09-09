@@ -31,6 +31,7 @@ class ImportBatchAdmin(admin.ModelAdmin):
         "created_at",
         "committed_at",
         "reprocessed_at",
+        "cleanup_archived_at",
     )
     list_filter = (
         "status",
@@ -45,6 +46,9 @@ class ImportBatchAdmin(admin.ModelAdmin):
         "updated_at",
         "committed_at",
         "reprocessed_at",
+        "cleanup_archived_at",
+        "cleanup_archived_by",
+        "cleanup_note",
     )
     inlines = (ImportFileInline,)
 
@@ -158,6 +162,7 @@ class ImportEffectAdmin(admin.ModelAdmin):
     readonly_fields = (
         "before_data",
         "after_data",
+        "cleanup_data",
         "applied_at",
         "reverted_at",
     )

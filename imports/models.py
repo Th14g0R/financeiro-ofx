@@ -56,6 +56,28 @@ class ImportBatch(models.Model):
         null=True,
         blank=True,
     )
+    cleanup_archived_at = models.DateTimeField(
+        "Arquivado após limpeza em",
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Quando preenchido, o lote foi mantido apenas como evidência da "
+            "importação original após a limpeza assistida dos efeitos financeiros."
+        ),
+    )
+    cleanup_archived_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        verbose_name="Arquivado após limpeza por",
+        related_name="cleanup_archived_import_batches",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+    )
+    cleanup_note = models.TextField(
+        "Observação da limpeza",
+        blank=True,
+    )
 
     class Meta:
         ordering = ["-created_at", "-id"]
@@ -538,6 +560,14 @@ class ImportEffect(models.Model):
         null=True,
         blank=True,
         db_index=True,
+    )
+    cleanup_data = models.JSONField(
+        "Dados da limpeza assistida",
+        default=dict,
+        blank=True,
+        help_text=(
+            "Snapshot e metadados preservados quando um efeito é removido pela limpeza assistida OFX."
+        ),
     )
 
     class Meta:

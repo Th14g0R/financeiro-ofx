@@ -16,6 +16,7 @@ from .views import TransactionCreateView
 from .views import TransactionListView
 from .views import TransactionUpdateView
 from .views import duplicate_analyze
+from .views import duplicate_review_bulk
 from .views import duplicate_review_detail
 from .views import duplicate_review_list
 from .views import account_toggle_active
@@ -137,6 +138,11 @@ path(
         "transactions/duplicates/analyze/",
         duplicate_analyze,
         name="duplicate-analyze",
+    ),
+    path(
+        "transactions/duplicates/bulk/",
+        duplicate_review_bulk,
+        name="duplicate-review-bulk",
     ),
     path(
         "transactions/duplicates/<int:pk>/",

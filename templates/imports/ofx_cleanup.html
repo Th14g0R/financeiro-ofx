@@ -1,0 +1,366 @@
+{% extends "base.html" %}
+{% load finance_extras %}
+
+{% block title %}Limpeza assistida de OFX{% endblock %}
+
+{% block content %}
+<div class="container-fluid px-4 py-4">
+    <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Limpeza assistida de OFX</h1>
+            <p class="text-secondary mb-0">
+                Prefira as movimentações do Pluggy, preserve metadados úteis e mantenha os arquivos OFX originais como evidência de auditoria.
+            </p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{% url 'finance:duplicate-review-list' %}" class="btn btn-outline-secondary">Revisar duplicidades</a>
+            <a href="{% url 'imports:history' %}" class="btn btn-outline-primary">Voltar às importações</a>
+        </div>
+    </div>
+
+    <div class="alert alert-info">
+        <strong>Modo seguro:</strong>
+        por padrão, a limpeza remove OFX somente quando existe equivalente Pluggy com a confiança escolhida ou quando o OFX apenas atualizou uma movimentação preexistente.
+        Movimentações OFX únicas não são apagadas sem autorização explícita.
+    </div>
+
+    {% if not batches %}
+        <div class="alert alert-success">
+            Não há efeitos financeiros OFX ativos para limpar. Os lotes já arquivados continuam disponíveis no histórico de importações.
+        </div>
+    {% else %}
+        <div class="row g-3 mb-4">
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-0 shadow-sm h-100"><div class="card-body">
+                    <div class="small text-secondary">Efeitos OFX ativos</div>
+                    <div class="fs-4 fw-semibold">{{ totals.TOTAL|default:0 }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-success shadow-sm h-100"><div class="card-body">
+                    <div class="small text-secondary">Equivalentes Pluggy</div>
+                    <div class="fs-4 fw-semibold text-success">{{ totals.PLUGGY_DUPLICATE|default:0 }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-primary shadow-sm h-100"><div class="card-body">
+                    <div class="small text-secondary">Atualizações a desfazer</div>
+                    <div class="fs-4 fw-semibold text-primary">{{ totals.UPDATED_REVERT|default:0 }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-warning shadow-sm h-100"><div class="card-body">
+                    <div class="small text-secondary">OFX únicos</div>
+                    <div class="fs-4 fw-semibold text-warning-emphasis">{{ totals.DIRECT_UNIQUE|default:0 }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-danger shadow-sm h-100"><div class="card-body">
+                    <div class="small text-secondary">Alterados sem Pluggy</div>
+                    <div class="fs-4 fw-semibold text-danger">{{ totals.MODIFIED_UNIQUE|default:0 }}</div>
+                </div></div>
+            </div>
+            <div class="col-6 col-md-4 col-xl-2">
+                <div class="card border-secondary shadow-sm h-100"><div class="card-body">
+                    <div class="small text-secondary">Ambíguos/bloqueados</div>
+                    <div class="fs-4 fw-semibold">{{ attention_total }}</div>
+                </div></div>
+            </div>
+        </div>
+
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between gap-2 align-items-lg-center">
+                <div>
+                    <div class="fw-semibold">Prévia por lote</div>
+                    <div class="small text-secondary">Selecione os lotes que deseja limpar. Arquivos originais serão preservados.</div>
+                </div>
+                <form method="get" class="d-flex gap-2 align-items-center">
+                    <label for="confidence_min" class="small text-secondary text-nowrap">Confiança Pluggy</label>
+                    <select id="confidence_min" name="confidence_min" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="100" {% if confidence_min == 100 %}selected{% endif %}>100%</option>
+                        <option value="95" {% if confidence_min == 95 %}selected{% endif %}>95%+</option>
+                        <option value="90" {% if confidence_min == 90 %}selected{% endif %}>90%+ (recomendado)</option>
+                        <option value="85" {% if confidence_min == 85 %}selected{% endif %}>85%+</option>
+                    </select>
+                </form>
+            </div>
+
+            <form method="post" id="ofxCleanupForm">
+                {% csrf_token %}
+                <input type="hidden" name="confidence_min" value="{{ confidence_min }}">
+
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 44px;">
+                                    <input type="checkbox" class="form-check-input" id="toggleAllBatches" checked aria-label="Selecionar todos os lotes">
+                                </th>
+                                <th>Lote / arquivos</th>
+                                <th class="text-end">Efeitos</th>
+                                <th class="text-end text-success">Pluggy</th>
+                                <th class="text-end text-primary">Reverter</th>
+                                <th class="text-end text-warning-emphasis">Únicos</th>
+                                <th class="text-end text-danger">Alterados</th>
+                                <th class="text-end">Amb./bloq.</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for batch in plan.batches %}
+                            <tr>
+                                <td>
+                                    <input
+                                        type="checkbox"
+                                        class="form-check-input cleanup-batch-checkbox"
+                                        name="batch_ids"
+                                        value="{{ batch.batch_id }}"
+                                        {% if batch.batch_id|stringformat:"s" in selected_batch_ids %}checked{% endif %}
+                                    >
+                                </td>
+                                <td>
+                                    <div class="fw-semibold">Lote #{{ batch.batch_id }} · {{ batch.created_at|date:"d/m/Y H:i" }}</div>
+                                    <div class="small text-secondary">
+                                        {% for file_name in batch.files %}
+                                            <span class="me-2">{{ file_name }}</span>
+                                        {% empty %}OFX/QFX{% endfor %}
+                                    </div>
+                                </td>
+                                <td class="text-end">{{ batch.total }}</td>
+                                <td class="text-end text-success fw-semibold">{{ batch.pluggy_duplicates }}</td>
+                                <td class="text-end text-primary fw-semibold">{{ batch.updated_reverts }}</td>
+                                <td class="text-end">{{ batch.unique_direct }}</td>
+                                <td class="text-end text-danger fw-semibold">{{ batch.modified_unique }}</td>
+                                <td class="text-end">{{ batch.ambiguous|add:batch.blocked }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <div class="card-body border-top">
+                    {% if form.non_field_errors %}
+                        <div class="alert alert-danger">{{ form.non_field_errors }}</div>
+                    {% endif %}
+                    {% if form.batch_ids.errors %}<div class="alert alert-danger py-2">{{ form.batch_ids.errors }}</div>{% endif %}
+
+                    <div class="row g-3">
+                        <div class="col-lg-5">
+                            <div class="form-check mt-2">
+                                <input
+                                    type="checkbox"
+                                    class="form-check-input"
+                                    id="deleteUniqueOfx"
+                                    name="delete_unique_ofx"
+                                    value="on"
+                                    {% if form.data.delete_unique_ofx %}checked{% endif %}
+                                >
+                                <label class="form-check-label fw-semibold" for="deleteUniqueOfx">
+                                    Excluir também OFX sem equivalente Pluggy
+                                </label>
+                                <div class="form-text">
+                                    Use com cautela: esses registros podem ser históricos não cobertos pelo período retornado pelo Pluggy.
+                                </div>
+                            </div>
+                            <div class="form-check mt-3">
+                                <input
+                                    type="checkbox"
+                                    class="form-check-input"
+                                    id="deleteModifiedUniqueOfx"
+                                    name="delete_modified_unique_ofx"
+                                    value="on"
+                                    {% if form.data.delete_modified_unique_ofx %}checked{% endif %}
+                                >
+                                <label class="form-check-label fw-semibold text-danger" for="deleteModifiedUniqueOfx">
+                                    Excluir também OFX alterados sem equivalente Pluggy
+                                </label>
+                                <div class="form-text">
+                                    A prévia mostra os campos alterados. O estado atual será salvo no histórico técnico da limpeza antes da remoção.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6 col-lg-3">
+                            <label class="form-label" for="id_confirmation">Digite <strong>LIMPAR OFX</strong></label>
+                            <input type="text" name="confirmation" id="id_confirmation" class="form-control" autocomplete="off" placeholder="LIMPAR OFX" required>
+                            {% if form.confirmation.errors %}<div class="text-danger small mt-1">{{ form.confirmation.errors|striptags }}</div>{% endif %}
+                        </div>
+                        <div class="col-md-6 col-lg-3">
+                            <label class="form-label" for="id_current_password">Senha atual</label>
+                            <input type="password" name="current_password" id="id_current_password" class="form-control" autocomplete="current-password" required>
+                            {% if form.current_password.errors %}<div class="text-danger small mt-1">{{ form.current_password.errors|striptags }}</div>{% endif %}
+                        </div>
+                        <div class="col-lg-1 d-flex align-items-end">
+                            <button type="submit" class="btn btn-danger w-100" id="executeOfxCleanup">Limpar</button>
+                        </div>
+                    </div>
+
+                    <div class="small text-secondary mt-3">
+                        A operação é transacional: se ocorrer uma falha, o lote em execução é revertido sem deixar alterações parciais. Movimentações OFX alteradas sem equivalente Pluggy e casos ambíguos permanecem preservados.
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        {% if safe_examples %}
+        <div class="card border-0 shadow-sm mb-4">
+            <div class="card-header bg-white">
+                <div class="fw-semibold">Exemplos do que será tratado automaticamente</div>
+                <div class="small text-secondary">Amostra de até 20 registros seguros da prévia atual.</div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>OFX</th>
+                            <th>Ação</th>
+                            <th>Equivalente Pluggy</th>
+                            <th class="text-end">Conf.</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in safe_examples %}
+                        <tr>
+                            <td>
+                                <div class="fw-semibold">{{ entry.bank_name }} · {{ entry.posted_at|date:"d/m/Y H:i" }}</div>
+                                <div>{{ entry.description|truncatechars:100 }}</div>
+                                <div class="small text-secondary">Mov. #{{ entry.transaction_id }} · lote #{{ entry.batch_id }}</div>
+                            </td>
+                            <td><span class="badge text-bg-{% if entry.category == 'PLUGGY_DUPLICATE' %}success{% else %}primary{% endif %}">{{ entry.category_label }}</span></td>
+                            <td>{{ entry.pluggy_label|default:"—" }}</td>
+                            <td class="text-end">{% if entry.pluggy_confidence %}{{ entry.pluggy_confidence }}%{% else %}—{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if unique_examples %}
+        <div class="card border-warning shadow-sm mb-4">
+            <div class="card-header bg-warning-subtle">
+                <div class="fw-semibold">OFX sem equivalente Pluggy na confiança atual</div>
+                <div class="small">Amostra de até 50 registros. Eles são preservados por padrão; revise esta lista antes de habilitar a exclusão de OFX únicos.</div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light"><tr><th>Banco / conta</th><th>Data</th><th>Descrição</th><th class="text-end">Valor</th></tr></thead>
+                    <tbody>
+                        {% for entry in unique_examples %}
+                        <tr>
+                            <td>{{ entry.bank_name }} · {{ entry.account_label }}<div class="small text-secondary">Mov. #{{ entry.transaction_id }} · lote #{{ entry.batch_id }}</div></td>
+                            <td class="text-nowrap">{{ entry.posted_at|date:"d/m/Y H:i" }}</td>
+                            <td>{{ entry.description|truncatechars:120 }}</td>
+                            <td class="text-end text-nowrap">{% if entry.direction == 'DEBIT' %}-{% else %}+{% endif %} {{ entry.amount|brl }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if attention_entries %}
+        <div class="card border-warning shadow-sm">
+            <div class="card-header bg-warning-subtle">
+                <div class="fw-semibold">Casos preservados para revisão manual</div>
+                <div class="small">Mostrando até 200 registros alterados, ambíguos ou bloqueados. Eles não serão removidos pela limpeza segura.</div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>Movimentação</th>
+                            <th>Situação</th>
+                            <th>Motivo / alterações posteriores</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for entry in attention_entries %}
+                        <tr>
+                            <td style="min-width: 320px;">
+                                <div class="fw-semibold">{{ entry.bank_name }} · #{{ entry.transaction_id }}</div>
+                                <div>{{ entry.posted_at|date:"d/m/Y H:i" }} · {{ entry.description|truncatechars:110 }}</div>
+                                <div class="small text-secondary">Lote #{{ entry.batch_id }} · item #{{ entry.import_item_id }}</div>
+                            </td>
+                            <td><span class="badge text-bg-warning">{{ entry.category_label }}</span></td>
+                            <td>
+                                <div>{{ entry.reason }}</div>
+                                {% if entry.differences %}
+                                    <details class="mt-2">
+                                        <summary class="small fw-semibold">Ver {{ entry.differences|length }} alteração(ões) posterior(es)</summary>
+                                        <div class="table-responsive mt-2">
+                                            <table class="table table-bordered table-sm mb-0 small">
+                                                <thead><tr><th>Campo</th><th>Após OFX</th><th>Atual</th></tr></thead>
+                                                <tbody>
+                                                    {% for diff in entry.differences %}
+                                                    <tr>
+                                                        <td>{{ diff.label }}</td>
+                                                        <td class="text-break">{{ diff.imported_value|truncatechars:180 }}</td>
+                                                        <td class="text-break">{{ diff.current_value|truncatechars:180 }}</td>
+                                                    </tr>
+                                                    {% endfor %}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </details>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+    {% endif %}
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const toggle = document.getElementById("toggleAllBatches");
+    const checkboxes = Array.from(document.querySelectorAll(".cleanup-batch-checkbox"));
+    if (toggle) {
+        const refreshToggle = () => {
+            const checked = checkboxes.filter((item) => item.checked).length;
+            toggle.checked = checked === checkboxes.length && checkboxes.length > 0;
+            toggle.indeterminate = checked > 0 && checked < checkboxes.length;
+        };
+        toggle.addEventListener("change", () => {
+            checkboxes.forEach((item) => { item.checked = toggle.checked; });
+            refreshToggle();
+        });
+        checkboxes.forEach((item) => item.addEventListener("change", refreshToggle));
+        refreshToggle();
+    }
+
+    const form = document.getElementById("ofxCleanupForm");
+    if (form) {
+        form.addEventListener("submit", (event) => {
+            const selected = checkboxes.filter((item) => item.checked).length;
+            if (!selected) {
+                event.preventDefault();
+                window.alert("Selecione ao menos um lote OFX.");
+                return;
+            }
+            const deleteUnique = document.getElementById("deleteUniqueOfx")?.checked;
+            const deleteModified = document.getElementById("deleteModifiedUniqueOfx")?.checked;
+            let warning = "A limpeza manterá o Pluggy como fonte principal e preservará OFX únicos/alterados sem equivalente seguro. Deseja continuar?";
+            if (deleteModified) {
+                warning = "ATENÇÃO: você habilitou a exclusão de OFX alterados sem equivalente Pluggy. O snapshot atual será preservado para auditoria, mas a movimentação será removida. Deseja continuar?";
+            } else if (deleteUnique) {
+                warning = "ATENÇÃO: você habilitou a exclusão de movimentações OFX sem equivalente Pluggy. Isso pode remover histórico único. Deseja continuar?";
+            }
+            if (!window.confirm(warning)) {
+                event.preventDefault();
+                return;
+            }
+            const button = document.getElementById("executeOfxCleanup");
+            if (button) {
+                button.disabled = true;
+                button.textContent = "Limpando...";
+            }
+        });
+    }
+});
+</script>
+{% endblock %}

@@ -18,6 +18,7 @@ from finance.models import Bank
 from imports.forms import CreateAccountFromOfxForm
 from imports.forms import ImportReprocessForm
 from imports.forms import MultipleOfxUploadForm
+from imports.forms import OfxCleanupForm
 from imports.models import ImportBatch
 from imports.models import ImportFile
 from imports.models import ImportItem
@@ -32,6 +33,9 @@ from services.importing import reclassify_import_item
 from services.importing import reclassify_statement
 from services.importing import reprocess_batch
 from services.importing import stage_uploaded_file
+from services.importing.ofx_cleanup import OfxCleanupError
+from services.importing.ofx_cleanup import build_ofx_cleanup_plan
+from services.importing.ofx_cleanup import execute_ofx_cleanup
 from services.importing import suggested_account_values
 from services.importing.commit import refresh_batch_status
 
@@ -157,6 +161,133 @@ def import_history(request):
     )
 
 
+def _active_ofx_cleanup_batches():
+    return (
+        ImportBatch.objects.filter(
+            cleanup_archived_at__isnull=True,
+            files__source_format=ImportFile.SourceFormat.OFX,
+            files__statements__items__effect__isnull=False,
+            files__statements__items__effect__reverted_at__isnull=True,
+        )
+        .distinct()
+        .prefetch_related("files")
+        .order_by("created_at", "pk")
+    )
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def ofx_cleanup(request):
+    batches = list(_active_ofx_cleanup_batches())
+
+    confidence_params = request.POST if request.method == "POST" else request.GET
+    try:
+        requested_confidence = int(confidence_params.get("confidence_min") or 90)
+    except (TypeError, ValueError):
+        requested_confidence = 90
+    if requested_confidence not in {85, 90, 95, 100}:
+        requested_confidence = 90
+
+    if request.method == "POST":
+        form = OfxCleanupForm(
+            request.POST,
+            user=request.user,
+            batches=batches,
+        )
+        if form.is_valid():
+            selected_batch_ids = [int(value) for value in form.cleaned_data["batch_ids"]]
+            try:
+                result = execute_ofx_cleanup(
+                    user=request.user,
+                    batch_ids=selected_batch_ids,
+                    confidence_min=form.cleaned_data["confidence_min"],
+                    delete_unique_ofx=form.cleaned_data["delete_unique_ofx"],
+                    delete_modified_unique_ofx=form.cleaned_data["delete_modified_unique_ofx"],
+                )
+            except OfxCleanupError as exc:
+                messages.error(request, str(exc))
+            else:
+                request.audit_detail = {
+                    "ofx_cleanup": True,
+                    "batch_ids": selected_batch_ids,
+                    "confidence_min": form.cleaned_data["confidence_min"],
+                    "delete_unique_ofx": form.cleaned_data["delete_unique_ofx"],
+                    "delete_modified_unique_ofx": form.cleaned_data["delete_modified_unique_ofx"],
+                    "effects_reverted": result.effects_reverted,
+                    "ofx_transactions_deleted": result.ofx_transactions_deleted,
+                    "transactions_restored": result.transactions_restored,
+                    "pluggy_transactions_reactivated": result.pluggy_transactions_reactivated,
+                    "pluggy_transactions_enriched": result.pluggy_transactions_enriched,
+                    "unique_ofx_deleted": result.unique_ofx_deleted,
+                    "modified_unique_deleted": result.modified_unique_deleted,
+                    "batches_archived": result.batches_archived,
+                }
+                message = (
+                    f"Limpeza OFX concluída: {result.ofx_transactions_deleted} movimentação(ões) OFX removida(s), "
+                    f"{result.transactions_restored} atualização(ões) OFX desfeita(s) e "
+                    f"{result.pluggy_transactions_reactivated} movimentação(ões) Pluggy reativada(s)."
+                )
+                pending = (
+                    result.skipped_modified_unique
+                    + result.skipped_ambiguous
+                    + result.skipped_blocked
+                )
+                if pending:
+                    message += f" {pending} caso(s) permaneceram preservados para revisão manual."
+                messages.success(request, message)
+                return redirect("imports:ofx-cleanup")
+    else:
+        form = OfxCleanupForm(
+            user=request.user,
+            batches=batches,
+            initial={
+                "batch_ids": [str(batch.pk) for batch in batches],
+                "confidence_min": requested_confidence,
+            },
+        )
+
+    plan = build_ofx_cleanup_plan(confidence_min=requested_confidence)
+    selected_batch_ids = (
+        set(request.POST.getlist("batch_ids"))
+        if request.method == "POST"
+        else {str(batch.pk) for batch in batches}
+    )
+    attention_entries = [
+        entry
+        for entry in plan.entries
+        if entry.category in {"MODIFIED_UNIQUE", "AMBIGUOUS", "BLOCKED"}
+    ][:200]
+    safe_examples = [
+        entry
+        for entry in plan.entries
+        if entry.category in {"PLUGGY_DUPLICATE", "UPDATED_REVERT"}
+    ][:20]
+    unique_examples = [
+        entry
+        for entry in plan.entries
+        if entry.category == "DIRECT_UNIQUE"
+    ][:50]
+    return render(
+        request,
+        "imports/ofx_cleanup.html",
+        {
+            "form": form,
+            "plan": plan,
+            "totals": plan.totals,
+            "batches": batches,
+            "confidence_min": requested_confidence,
+            "selected_batch_ids": selected_batch_ids,
+            "attention_entries": attention_entries,
+            "attention_total": (
+                plan.totals.get("AMBIGUOUS", 0)
+                + plan.totals.get("BLOCKED", 0)
+            ),
+            "safe_examples": safe_examples,
+            "unique_examples": unique_examples,
+        },
+    )
+
+
 @login_required
 def batch_detail(request, pk):
     batch = _get_batch(request, pk)
@@ -245,7 +376,8 @@ def batch_detail(request, pk):
     }
 
     pending_committable = (
-        items.filter(
+        batch.cleanup_archived_at is None
+        and items.filter(
             commit_status=ImportItem.CommitStatus.PENDING,
             is_excluded=False,
         )
@@ -280,6 +412,14 @@ def batch_detail(request, pk):
 @require_http_methods(["GET", "POST"])
 def batch_edit(request, pk):
     batch = _get_batch(request, pk)
+
+    if batch.cleanup_archived_at:
+        messages.warning(
+            request,
+            "Este lote foi arquivado após a limpeza OFX e não pode ser reprocessado. "
+            "Os arquivos foram preservados apenas para auditoria.",
+        )
+        return redirect("imports:batch-detail", pk=batch.pk)
 
     if request.method == "POST":
         form = ImportReprocessForm(
@@ -357,6 +497,13 @@ def batch_delete(request, pk):
 @require_POST
 def assign_statement_account(request, pk, statement_pk):
     batch = _get_batch(request, pk)
+
+    if batch.cleanup_archived_at:
+        messages.error(
+            request,
+            "Este lote está arquivado após a limpeza OFX e não pode ser alterado.",
+        )
+        return redirect("imports:batch-detail", pk=batch.pk)
 
     statement = get_object_or_404(
         ImportStatement.objects.select_related(
@@ -444,6 +591,13 @@ def assign_statement_account(request, pk, statement_pk):
 @require_http_methods(["GET", "POST"])
 def create_statement_account(request, pk, statement_pk):
     batch = _get_batch(request, pk)
+
+    if batch.cleanup_archived_at:
+        messages.error(
+            request,
+            "Este lote está arquivado após a limpeza OFX e não pode ser alterado.",
+        )
+        return redirect("imports:batch-detail", pk=batch.pk)
 
     statement = get_object_or_404(
         ImportStatement.objects.select_related(
@@ -575,6 +729,13 @@ def create_statement_account(request, pk, statement_pk):
 def commit_import_item(request, pk, item_pk):
     batch = _get_batch(request, pk)
 
+    if batch.cleanup_archived_at:
+        messages.error(
+            request,
+            "Este lote está arquivado após a limpeza OFX e não pode voltar a gravar movimentações.",
+        )
+        return redirect("imports:batch-detail", pk=batch.pk)
+
     item = get_object_or_404(
         ImportItem.objects.select_related(
             "statement",
@@ -662,6 +823,13 @@ def commit_import_item(request, pk, item_pk):
 @require_POST
 def toggle_import_item_exclusion(request, pk, item_pk):
     batch = _get_batch(request, pk)
+
+    if batch.cleanup_archived_at:
+        messages.error(
+            request,
+            "Este lote está arquivado após a limpeza OFX e não pode ser alterado.",
+        )
+        return redirect("imports:batch-detail", pk=batch.pk)
 
     item = get_object_or_404(
         ImportItem.objects.select_related(
@@ -794,6 +962,13 @@ def toggle_import_item_exclusion(request, pk, item_pk):
 @require_POST
 def commit_import_batch(request, pk):
     batch = _get_batch(request, pk)
+
+    if batch.cleanup_archived_at:
+        messages.error(
+            request,
+            "Este lote está arquivado após a limpeza OFX e não pode voltar a gravar movimentações.",
+        )
+        return redirect("imports:batch-detail", pk=batch.pk)
 
     divergent_items = ImportItem.objects.filter(
         statement__import_file__batch=batch,

@@ -3,6 +3,7 @@ from pathlib import Path
 from django import forms
 
 from finance.models import Account
+from imports.models import ImportFile
 
 
 MAX_STATEMENT_FILE_SIZE = 20 * 1024 * 1024
@@ -257,3 +258,95 @@ class CreateAccountFromOfxForm(forms.Form):
             )
 
         return value
+
+
+class OfxCleanupForm(forms.Form):
+    batch_ids = forms.MultipleChoiceField(
+        label="Lotes OFX",
+        choices=(),
+        widget=forms.CheckboxSelectMultiple,
+    )
+    confidence_min = forms.TypedChoiceField(
+        label="Confiança mínima para substituir OFX por Pluggy",
+        coerce=int,
+        choices=[
+            (100, "100%"),
+            (95, "95% ou mais"),
+            (90, "90% ou mais (recomendado)"),
+            (85, "85% ou mais"),
+        ],
+        initial=90,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    delete_unique_ofx = forms.BooleanField(
+        label="Excluir também movimentações OFX sem equivalente Pluggy",
+        required=False,
+        help_text=(
+            "Desmarcado por segurança. Ative somente se você realmente quiser remover "
+            "movimentações que podem não existir no histórico retornado pelo Pluggy."
+        ),
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    delete_modified_unique_ofx = forms.BooleanField(
+        label="Excluir também OFX alterados sem equivalente Pluggy",
+        required=False,
+        help_text=(
+            "As alterações posteriores serão registradas no histórico técnico da limpeza antes "
+            "da remoção. Use somente após revisar os campos exibidos na prévia."
+        ),
+        widget=forms.CheckboxInput(attrs={"class": "form-check-input"}),
+    )
+    confirmation = forms.CharField(
+        label='Digite "LIMPAR OFX"',
+        max_length=20,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "autocomplete": "off",
+                "placeholder": "LIMPAR OFX",
+            }
+        ),
+    )
+    current_password = forms.CharField(
+        label="Senha atual",
+        strip=False,
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={
+                "class": "form-control",
+                "autocomplete": "current-password",
+            },
+        ),
+    )
+
+    def __init__(self, *args, user=None, batches=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+        batch_choices = []
+        for batch in batches or []:
+            file_names = ", ".join(
+                file.original_name
+                for file in batch.files.all()
+                if file.source_format == ImportFile.SourceFormat.OFX
+            )
+            label = f"Lote #{batch.pk} · {batch.created_at:%d/%m/%Y %H:%M}"
+            if file_names:
+                label += f" · {file_names}"
+            batch_choices.append((str(batch.pk), label))
+        self.fields["batch_ids"].choices = batch_choices
+
+    def clean_confirmation(self):
+        value = (self.cleaned_data.get("confirmation") or "").strip().upper()
+        if value != "LIMPAR OFX":
+            raise forms.ValidationError('Digite exatamente "LIMPAR OFX" para confirmar.')
+        return value
+
+    def clean_current_password(self):
+        password = self.cleaned_data.get("current_password") or ""
+        if (
+            self.user is None
+            or not self.user.is_authenticated
+            or not self.user.check_password(password)
+        ):
+            raise forms.ValidationError("A senha atual não confere.")
+        return password

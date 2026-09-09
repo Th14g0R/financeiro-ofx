@@ -14,7 +14,13 @@
             </p>
         </div>
 
-        <div>
+        <div class="d-flex gap-2">
+            <a
+                href="{% url 'imports:ofx-cleanup' %}"
+                class="btn btn-outline-danger"
+            >
+                Limpeza OFX
+            </a>
             <a
                 href="{% url 'imports:upload' %}"
                 class="btn btn-primary"
@@ -74,7 +80,12 @@
                         </td>
 
                         <td>
-                            {{ batch.get_status_display }}
+                            {% if batch.cleanup_archived_at %}
+                                <span class="badge text-bg-secondary">Arquivado após limpeza OFX</span>
+                                <div class="small text-secondary mt-1">{{ batch.cleanup_archived_at|date:"d/m/Y H:i" }}</div>
+                            {% else %}
+                                {{ batch.get_status_display }}
+                            {% endif %}
                         </td>
 
                         <td>
@@ -93,12 +104,14 @@
                                 Abrir
                             </a>
 
+                            {% if not batch.cleanup_archived_at %}
                             <a
                                 href="{% url 'imports:batch-edit' batch.pk %}"
                                 class="btn btn-sm btn-outline-primary"
                             >
                                 Editar
                             </a>
+                            {% endif %}
 
                             <a
                                 href="{% url 'imports:batch-delete' batch.pk %}"
