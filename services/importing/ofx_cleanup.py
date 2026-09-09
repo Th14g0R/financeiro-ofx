@@ -17,6 +17,7 @@ from imports.models import ImportFile
 from imports.models import ImportItem
 from integrations.models import PluggyTransactionLink
 from services.importing.commit import restore_transaction_snapshot
+from services.importing.commit import snapshot_values_equal
 from services.importing.commit import transaction_snapshot
 
 
@@ -273,7 +274,7 @@ def _differences(effect: ImportEffect) -> list[FieldDifference]:
     differences = []
     for field_name, imported_value in effect.after_data.items():
         current_value = current.get(field_name)
-        if current_value != imported_value:
+        if not snapshot_values_equal(field_name, current_value, imported_value):
             differences.append(
                 FieldDifference(
                     field=field_name,
@@ -553,11 +554,12 @@ def _three_way_revert_snapshot(effect: ImportEffect, current: dict) -> dict:
     for field_name, before_value in before.items():
         after_value = after.get(field_name)
         current_value = current.get(field_name)
-        if before_value == after_value:
+        if snapshot_values_equal(field_name, before_value, after_value):
             continue
-        # Reverte apenas o valor que ainda representa exatamente a alteração
-        # da importação. Se houve edição posterior, ela prevalece.
-        if current_value == after_value:
+        # Reverte apenas o valor que ainda representa semanticamente a alteração
+        # da importação. Offsets diferentes do mesmo instante não contam como
+        # edição posterior. Se houve edição real depois, ela prevalece.
+        if snapshot_values_equal(field_name, current_value, after_value):
             target[field_name] = before_value
     return target
 
@@ -570,7 +572,7 @@ def _mark_effect_reverted(
     cleanup_data: dict | None = None,
 ) -> None:
     payload = {
-        "cleanup_version": "10.9.8",
+        "cleanup_version": "10.9.8.1",
         "cleaned_at": now.isoformat(),
         "cleaned_by_id": getattr(user, "pk", None),
     }

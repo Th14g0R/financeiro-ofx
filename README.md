@@ -1,9 +1,22 @@
-# Financeiro OFX — Etapa 10.9.8
+# Financeiro OFX — Etapa 10.9.8.1
 
 
 
 
 
+
+
+## Hotfix 10.9.8.1 — snapshots de data/hora com fuso horário
+
+- Corrige falso positivo de "movimentação alterada" quando o mesmo instante
+  aparece em offsets ISO diferentes (por exemplo, `08:55-03:00` e `11:55+00:00`).
+- O snapshot passa a persistir `posted_at` de forma canônica em UTC; snapshots
+  antigos continuam compatíveis porque a comparação de `posted_at` é semântica.
+- A limpeza OFX em três vias volta a restaurar corretamente a data/hora anterior
+  quando o valor atual representa o mesmo instante gravado pelo OFX.
+- O rollback tradicional também deixa de bloquear exclusões apenas por diferença
+  textual de timezone.
+- Testes de horário passam a validar o horário local de `America/Fortaleza`.
 
 
 ## Etapa 10.9.8 — limpeza assistida de OFX preservando Pluggy

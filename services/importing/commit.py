@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from datetime import datetime
+from datetime import timezone as datetime_timezone
 from typing import Any
 
 from django.core.exceptions import ValidationError
@@ -22,10 +23,56 @@ class ImportCommitError(ValueError):
     pass
 
 
+def _snapshot_datetime(value: datetime | str | None) -> datetime | None:
+    """Normaliza datetimes de snapshots para comparação semântica.
+
+    Com USE_TZ=True o mesmo instante pode reaparecer vindo do SQLite em UTC
+    mesmo que o objeto original tenha sido criado em America/Fortaleza.
+    Snapshots históricos também podem conter offsets diferentes. Para decidir
+    se houve alteração real, comparamos o instante e não a string ISO literal.
+    """
+    if value in (None, ""):
+        return None
+
+    parsed = (
+        value
+        if isinstance(value, datetime)
+        else datetime.fromisoformat(str(value))
+    )
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed.astimezone(datetime_timezone.utc)
+
+
+def snapshot_values_equal(field_name: str, left: object, right: object) -> bool:
+    if field_name == "posted_at":
+        try:
+            return _snapshot_datetime(left) == _snapshot_datetime(right)
+        except (TypeError, ValueError):
+            return left == right
+    return left == right
+
+
+def snapshots_equivalent(current: dict, expected: dict) -> bool:
+    """Compara apenas os campos existentes no snapshot histórico esperado."""
+    return all(
+        snapshot_values_equal(
+            field_name,
+            current.get(field_name),
+            expected_value,
+        )
+        for field_name, expected_value in expected.items()
+    )
+
+
 def transaction_snapshot(transaction: Transaction) -> dict:
+    posted_at = transaction.posted_at
+    if timezone.is_aware(posted_at):
+        posted_at = posted_at.astimezone(datetime_timezone.utc)
+
     return {
         "account_id": transaction.account_id,
-        "posted_at": transaction.posted_at.isoformat(),
+        "posted_at": posted_at.isoformat(),
         "competence_date": (
             transaction.competence_date.isoformat()
             if transaction.competence_date

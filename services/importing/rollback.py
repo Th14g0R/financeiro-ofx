@@ -12,6 +12,7 @@ from imports.models import ImportEffect
 from imports.models import ImportFile
 from imports.models import ImportItem
 from services.importing.commit import restore_transaction_snapshot
+from services.importing.commit import snapshots_equivalent
 from services.importing.commit import transaction_snapshot
 from services.importing.staging import stage_uploaded_file
 
@@ -74,7 +75,10 @@ def rollback_batch(batch: ImportBatch):
         if (
             transaction is not None
             and effect.after_data
-            and transaction_snapshot(transaction) != effect.after_data
+            and not snapshots_equivalent(
+                transaction_snapshot(transaction),
+                effect.after_data,
+            )
         ):
             raise ImportRollbackError(
                 "Uma movimentação deste lote foi alterada depois da "

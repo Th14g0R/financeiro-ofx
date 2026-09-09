@@ -164,11 +164,25 @@ class OfxCleanupTests(TestCase):
         self.assertFalse(Transaction.objects.filter(pk=ofx_tx.pk).exists())
         pluggy_tx.refresh_from_db()
         self.assertFalse(pluggy_tx.is_financially_ignored)
-        self.assertEqual(pluggy_tx.posted_at.hour, 8)
+        self.assertEqual(timezone.localtime(pluggy_tx.posted_at).hour, 8)
         batch.refresh_from_db()
         self.assertIsNotNone(batch.cleanup_archived_at)
         self.assertEqual(batch.cleanup_archived_by, self.user)
         self.assertTrue(batch.files.filter(file__isnull=False).exists())
+
+    def test_historical_snapshot_with_local_offset_is_not_false_modification(self):
+        batch, item = self._batch_item(sequence=6)
+        tx = self._transaction(source_type=Transaction.SourceType.OFX, fitid="OFX-6")
+        effect = self._created_effect(item, tx)
+        historical = dict(effect.after_data)
+        historical["posted_at"] = self.posted_at.isoformat()
+        effect.after_data = historical
+        effect.save(update_fields=["after_data"])
+
+        plan = build_ofx_cleanup_plan(batch_ids=[batch.pk])
+
+        self.assertEqual(plan.entries[0].category, CATEGORY_DIRECT_UNIQUE)
+        self.assertFalse(plan.entries[0].differences)
 
     def test_modified_unique_ofx_is_preserved(self):
         batch, item = self._batch_item(sequence=2)
@@ -263,7 +277,7 @@ class OfxCleanupTests(TestCase):
         tx.refresh_from_db()
         self.assertEqual(tx.source_type, Transaction.SourceType.API)
         self.assertTrue(tx.fitid.startswith("PLUGGY:"))
-        self.assertEqual(tx.posted_at.hour, 8)
+        self.assertEqual(timezone.localtime(tx.posted_at).hour, 8)
         self.assertEqual(tx.raw_description, "Descrição editada manualmente depois")
 
     def test_cleanup_page_requires_login(self):
