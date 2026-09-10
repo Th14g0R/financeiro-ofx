@@ -212,3 +212,38 @@ A cópia do Pluggy agora participa do mesmo processo de revisão financeira das 
 Quando a Pluggy devolver HTTP 404, o Financeiro OFX passa a informar em qual etapa a falha ocorreu: consulta do Item, listagem de contas ou listagem de transações. Os dados já copiados localmente não são apagados por uma falha remota.
 
 Na revisão de contas semelhantes, a interface preserva explicitamente qual botão disparou o formulário antes de ativar o estado de carregamento. Isso evita perder a decisão `use_existing`/`keep_separate` ao desabilitar os botões durante o envio.
+
+## Detalhes de transferências e Cofrinho (10.9.9)
+
+A partir da 10.9.9, `paymentData` é normalizado no lançamento local para preservar,
+quando a instituição fornecer: pagador, recebedor, COMPE/ISPB, agência, conta,
+documento, meio de pagamento, referência e código de autenticação. Uma chave PIX
+só é exibida quando vier explicitamente em algum campo do payload; ela não é
+inferida a partir de CPF, telefone ou conta.
+
+Movimentos identificados com segurança como transferência entre o saldo disponível
+e Cofrinho/reserva da mesma conta ficam no extrato e na auditoria, mas são tratados
+como movimentação interna e não compõem entrada/saída externa no Dashboard.
+Rendimentos/juros/CDI permanecem contabilizados como receita real.
+
+Para reaproveitar os metadados em lançamentos Pluggy já existentes, a migration da
+10.9.9 faz um backfill conservador a partir do `raw_data` já armazenado. Executar
+**Copiar dados e organizar bancos** novamente também atualiza esses campos com o
+payload mais recente e reexecuta a classificação de Cofrinho/reserva.
+
+
+## Categorias de transações (10.9.10)
+
+Quando a API retornar `category` e `categoryId`, o Financeiro OFX preserva esses
+valores como metadados da origem e cria/reutiliza uma categoria local com o mesmo
+nome. Se `category` não vier, `merchant.category` pode ser usado como fallback.
+A disponibilidade da categorização depende dos recursos habilitados na conta Pluggy.
+
+A primeira categoria recebida pode ser aplicada automaticamente ao lançamento. Depois
+que o usuário altera a categoria no Financeiro OFX, essa decisão passa a ser manual e
+não é sobrescrita por sincronizações posteriores. A alteração local também não envia
+um PATCH de categorização para a Pluggy; ela vale somente no Financeiro OFX.
+
+Use **Movimentações** para filtrar por categoria ou alterar a categoria de um lançamento
+sem liberar a edição dos demais campos financeiros. A tela de **Revisão de duplicidades**
+também aceita filtro por categoria.

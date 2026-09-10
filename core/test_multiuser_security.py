@@ -267,6 +267,8 @@ class AuthenticationSecurityEventTests(TestCase):
             username="auth-event-user",
             password="Strong-password-2026!",
         )
+        self.user.access_profile.role = UserAccessProfile.Role.ADMIN
+        self.user.access_profile.save(update_fields=["role", "updated_at"])
 
     def test_invalid_login_creates_security_event_without_password(self):
         response = self.client.post(
@@ -293,6 +295,8 @@ class WebSecurityRegressionTests(TestCase):
             username="security-regression-user",
             password="Strong-password-2026!",
         )
+        self.user.access_profile.role = UserAccessProfile.Role.ADMIN
+        self.user.access_profile.save(update_fields=["role", "updated_at"])
 
     def test_remote_http_admin_surface_is_rejected(self):
         self.client.force_login(self.user)
@@ -426,3 +430,128 @@ class WebSecurityRegressionTests(TestCase):
             "frame-ancestors 'none'",
             response.headers.get("Content-Security-Policy", ""),
         )
+
+
+class InitialAdministratorSetupTests(TestCase):
+    setup_url_name = "initial_admin_setup"
+
+    def _payload(self, **overrides):
+        data = {
+            "username": "thiago-admin",
+            "first_name": "Thiago",
+            "last_name": "Rezende",
+            "email": "thiago-admin@example.com",
+            "password1": "Initial-admin-password-2026!",
+            "password2": "Initial-admin-password-2026!",
+        }
+        data.update(overrides)
+        return data
+
+    def test_login_redirects_to_first_access_when_no_admin_exists(self):
+        response = self.client.get(
+            reverse("login"),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse(self.setup_url_name))
+
+    def test_first_access_form_is_available_only_on_loopback(self):
+        local = self.client.get(
+            reverse(self.setup_url_name),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(local.status_code, 200)
+        self.assertContains(local, "Criar administrador inicial")
+
+        remote = self.client.get(
+            reverse(self.setup_url_name),
+            REMOTE_ADDR="192.168.1.50",
+        )
+        self.assertEqual(remote.status_code, 403)
+        self.assertContains(
+            remote,
+            "Criação do administrador bloqueada",
+            status_code=403,
+        )
+
+    def test_site_creates_first_superuser_and_logs_it_in(self):
+        response = self.client.post(
+            reverse(self.setup_url_name),
+            self._payload(),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("home"))
+
+        user = get_user_model().objects.get(username="thiago-admin")
+        self.assertTrue(user.is_active)
+        self.assertTrue(user.is_staff)
+        self.assertTrue(user.is_superuser)
+        self.assertEqual(user.first_name, "Thiago")
+        self.assertEqual(user.last_name, "Rezende")
+        self.assertEqual(user.email, "thiago-admin@example.com")
+        self.assertEqual(
+            user.access_profile.role,
+            UserAccessProfile.Role.ADMIN,
+        )
+        self.assertEqual(
+            int(self.client.session["_auth_user_id"]),
+            user.pk,
+        )
+        self.assertTrue(
+            AuditEvent.objects.filter(
+                actor=user,
+                action="initial_admin_setup",
+                success=True,
+            ).exists()
+        )
+
+    def test_existing_active_admin_closes_first_access_route(self):
+        user = get_user_model().objects.create_user(
+            username="existing-admin",
+            password="Existing-admin-password-2026!",
+        )
+        user.access_profile.role = UserAccessProfile.Role.ADMIN
+        user.access_profile.save(update_fields=["role", "updated_at"])
+
+        response = self.client.get(
+            reverse(self.setup_url_name),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, reverse("login"))
+
+    def test_operator_without_admin_can_recover_by_creating_admin_locally(self):
+        operator = get_user_model().objects.create_user(
+            username="existing-operator",
+            password="Existing-operator-password-2026!",
+            email="operator@example.com",
+        )
+        self.assertEqual(
+            operator.access_profile.role,
+            UserAccessProfile.Role.OPERATOR,
+        )
+
+        response = self.client.post(
+            reverse(self.setup_url_name),
+            self._payload(username="recovery-admin"),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 302)
+        created = get_user_model().objects.get(username="recovery-admin")
+        self.assertTrue(created.is_superuser)
+        self.assertEqual(
+            created.access_profile.role,
+            UserAccessProfile.Role.ADMIN,
+        )
+        operator.refresh_from_db()
+        self.assertTrue(operator.is_active)
+
+    def test_first_access_post_requires_csrf(self):
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(
+            reverse(self.setup_url_name),
+            self._payload(),
+            REMOTE_ADDR="127.0.0.1",
+        )
+        self.assertEqual(response.status_code, 403)

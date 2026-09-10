@@ -6,6 +6,7 @@ from django.urls import path
 from core.health import health_check
 from core.views import home
 from core.views_security import SecureLoginView
+from core.views_security import initial_admin_setup
 from core.views_security import SecurePasswordChangeView
 from core.views_security import SecurePasswordResetConfirmView
 from core.views_security import SecurePasswordResetView
@@ -52,6 +53,11 @@ urlpatterns = [
         "",
         home,
         name="home",
+    ),
+    path(
+        "primeiro-acesso/",
+        initial_admin_setup,
+        name="initial_admin_setup",
     ),
     path(
         "login/",

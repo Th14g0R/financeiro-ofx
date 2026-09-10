@@ -361,42 +361,33 @@
             <div class="card dashboard-card h-100">
                 <div class="card-body">
                     <div class="text-secondary small mb-2">
-                        Entre minhas contas
+                        Movimentações internas
                     </div>
 
                     {% if selected_bank %}
-                        <div
-                            class="fs-5 fw-semibold"
-                            data-sensitive-value
-                        >
+                        <div class="fs-5 fw-semibold" data-sensitive-value>
                             {{ internal_net|brl_signed }}
                         </div>
-
                         <div class="small text-secondary mt-2">
-                            Recebido:
-                            <span data-sensitive-value>
-                                {{ internal_received|brl }}
-                            </span>
+                            Entre contas — recebido: <span data-sensitive-value>{{ between_accounts_received|brl }}</span> · enviado: <span data-sensitive-value>{{ between_accounts_sent|brl }}</span>
                         </div>
-
-                        <div class="small text-secondary">
-                            Enviado:
-                            <span data-sensitive-value>
-                                {{ internal_sent|brl }}
-                            </span>
+                        {% if internal_balance_count %}
+                        <div class="small text-secondary mt-1">
+                            Cofrinho/reserva — retorno ao saldo: <span data-sensitive-value>{{ internal_balance_received|brl }}</span> · enviado ao cofrinho: <span data-sensitive-value>{{ internal_balance_sent|brl }}</span>
                         </div>
+                        {% endif %}
                     {% else %}
-                        <div
-                            class="fs-3 fw-semibold"
-                            data-sensitive-value
-                        >
+                        <div class="fs-5 fw-semibold" data-sensitive-value>
                             {{ internal_volume|brl }}
                         </div>
-
                         <div class="small text-secondary mt-1">
-                            {{ internal_transfer_count }}
-                            transferência(ões) interna(s)
+                            {{ internal_transfer_count }} transferência(ões) entre contas próprias
                         </div>
+                        {% if internal_balance_count %}
+                        <div class="small text-secondary mt-1">
+                            {{ internal_balance_count }} movimento(s) de cofrinho/reserva fora dos totais externos
+                        </div>
+                        {% endif %}
                     {% endif %}
                 </div>
             </div>

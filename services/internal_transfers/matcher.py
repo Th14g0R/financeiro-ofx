@@ -453,6 +453,7 @@ def analyze_internal_transfers(
         .filter(
             account__is_own_account=True,
             is_financially_ignored=False,
+            is_internal_balance_movement=False,
         )
         .order_by(
             "posted_at",

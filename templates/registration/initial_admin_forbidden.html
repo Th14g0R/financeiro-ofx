@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block title %}Primeiro acesso bloqueado{% endblock %}
+
+{% block content %}
+<div class="auth-page">
+    <div class="container">
+        <div class="row justify-content-center">
+            <div class="col-12 col-md-8 col-lg-6">
+                <div class="card border-0 shadow-lg">
+                    <div class="card-body p-4 p-md-5">
+                        <span class="badge text-bg-danger mb-3">Acesso local obrigatório</span>
+                        <h1 class="h4 fw-bold">Criação do administrador bloqueada</h1>
+                        <p class="text-secondary">
+                            O administrador inicial só pode ser criado diretamente no computador
+                            onde o Financeiro OFX está instalado.
+                        </p>
+                        <p class="mb-0">
+                            Abra neste computador:
+                            <strong>http://127.0.0.1:8000/</strong>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

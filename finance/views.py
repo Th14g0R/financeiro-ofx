@@ -1,4 +1,5 @@
 from collections import Counter
+from dataclasses import replace
 from datetime import date
 from urllib.parse import urlencode
 from decimal import Decimal
@@ -21,6 +22,7 @@ from django.shortcuts import render
 from django.core.paginator import Paginator
 from django.urls import reverse
 from django.urls import reverse_lazy
+from django.utils.http import url_has_allowed_host_and_scheme
 from django.views.decorators.http import require_POST
 from django.views.decorators.http import require_http_methods
 from django.views.generic import CreateView
@@ -34,9 +36,12 @@ from .forms import CounterpartyMergeConfirmForm
 from .forms import CounterpartyMergeSelectionForm
 from .forms import TransactionForm
 from .forms import DuplicateBulkReviewForm
+from .forms import DuplicateGroupBulkReviewForm
+from .forms import DuplicateGroupReviewForm
 from .forms import DuplicateReviewForm
 from .models import Account
 from .models import Bank
+from .models import Category
 from .models import Counterparty
 from .models import CounterpartyAlias
 from .models import InternalTransfer
@@ -47,12 +52,15 @@ from services.counterparties import merge_counterparties_manually
 from services.counterparties import normalize_identity_text
 from services.counterparties import rebuild_counterparty_links
 from services.internal_transfers import analyze_internal_transfers
+from services.internal_transfers import analyze_internal_balance_movements
 from services.internal_transfers import annotate_financial_scope
 from services.internal_transfers import confirm_internal_transfer
 from services.internal_transfers import deactivate_account_internal_links
 from services.internal_transfers import reject_internal_transfer
 from services.internal_transfers import reopen_internal_transfer
 from services.duplicates import analyze_duplicates
+from services.duplicates import build_duplicate_review_groups
+from services.duplicates import review_duplicate_group
 from services.duplicates import review_duplicate_pair
 from core.sorting import apply_sorting
 
@@ -355,6 +363,7 @@ class TransactionListView(LoginRequiredMixin, ListView):
         direction = self.request.GET.get("direction", "").strip()
         transaction_type = self.request.GET.get("type", "").strip()
         source_type = self.request.GET.get("source", "").strip()
+        category_id = self.request.GET.get("category", "").strip()
         financial_scope = self.request.GET.get(
             "scope",
             "",
@@ -374,6 +383,8 @@ class TransactionListView(LoginRequiredMixin, ListView):
                 | Q(fitid__icontains=query)
                 | Q(account__nickname__icontains=query)
                 | Q(account__bank__name__icontains=query)
+                | Q(category__name__icontains=query)
+                | Q(source_category_name__icontains=query)
                 | Q(
                     counterparty__normalized_name__icontains=(
                         normalized_query
@@ -415,7 +426,14 @@ class TransactionListView(LoginRequiredMixin, ListView):
         if source_type in valid_sources:
             queryset = queryset.filter(source_type=source_type)
 
-        if financial_scope == "internal":
+        if category_id.isdigit():
+            queryset = queryset.filter(category_id=int(category_id))
+
+        if financial_scope == "internal_balance":
+            queryset = queryset.filter(
+                is_internal_balance_movement=True
+            )
+        elif financial_scope == "internal":
             queryset = queryset.filter(
                 is_internal_transfer=True
             )
@@ -474,6 +492,7 @@ class TransactionListView(LoginRequiredMixin, ListView):
                 "description": "raw_description",
                 "type": "transaction_type",
                 "source": "source_type",
+                "category": "category__name",
                 "counterparty": "counterparty__display_name",
                 "scope": "financial_scope_rank",
                 "amount": "amount",
@@ -521,6 +540,7 @@ class TransactionListView(LoginRequiredMixin, ListView):
                 "direction_choices": Transaction.Direction.choices,
                 "type_choices": Transaction.TransactionType.choices,
                 "source_choices": Transaction.SourceType.choices,
+                "categories": Category.objects.filter(is_active=True).order_by("name"),
                 "query": self.request.GET.get("q", "").strip(),
                 "bank_filter": self.request.GET.get("bank", "").strip(),
                 "account_filter": self.request.GET.get(
@@ -536,6 +556,10 @@ class TransactionListView(LoginRequiredMixin, ListView):
                     "source",
                     "",
                 ).strip(),
+                "category_filter": self.request.GET.get(
+                    "category",
+                    "",
+                ).strip(),
                 "scope_filter": self.request.GET.get(
                     "scope",
                     "",
@@ -544,7 +568,11 @@ class TransactionListView(LoginRequiredMixin, ListView):
                     ("external", "Externa"),
                     (
                         "internal",
-                        "Transferência interna",
+                        "Movimentação interna",
+                    ),
+                    (
+                        "internal_balance",
+                        "Cofrinho/reserva da mesma conta",
                     ),
                     (
                         "possible",
@@ -571,6 +599,48 @@ class TransactionListView(LoginRequiredMixin, ListView):
 
 @login_required
 @require_POST
+def transaction_category_update(request, pk):
+    transaction = get_object_or_404(Transaction, pk=pk)
+    category_value = (request.POST.get("category") or "").strip()
+
+    if category_value:
+        if not category_value.isdigit():
+            messages.error(request, "Categoria inválida.")
+            return redirect("finance:transaction-list")
+        category = get_object_or_404(Category, pk=int(category_value), is_active=True)
+        if category.category_type not in {
+            Category.CategoryType.BOTH,
+            (
+                Category.CategoryType.INCOME
+                if transaction.direction == Transaction.Direction.CREDIT
+                else Category.CategoryType.EXPENSE
+            ),
+        }:
+            messages.error(request, "A categoria escolhida não é compatível com a natureza da movimentação.")
+            return redirect("finance:transaction-list")
+    else:
+        category = None
+
+    transaction.category = category
+    transaction.category_assignment_source = Transaction.CategoryAssignmentSource.MANUAL
+    transaction.save(update_fields=["category", "category_assignment_source", "updated_at"])
+    messages.success(
+        request,
+        f"Categoria da movimentação #{transaction.pk} atualizada.",
+    )
+
+    next_url = (request.POST.get("next") or "").strip()
+    if next_url and url_has_allowed_host_and_scheme(
+        next_url,
+        allowed_hosts={request.get_host()},
+        require_https=request.is_secure(),
+    ):
+        return redirect(next_url)
+    return redirect("finance:transaction-list")
+
+
+@login_required
+@require_POST
 def duplicate_analyze(request):
     analyzed = analyze_duplicates()
     pending = TransactionDuplicateReview.objects.filter(
@@ -583,35 +653,121 @@ def duplicate_analyze(request):
     return redirect("finance:duplicate-review-list")
 
 
+def _all_pending_duplicate_reviews():
+    return list(
+        TransactionDuplicateReview.objects.filter(
+            status=TransactionDuplicateReview.Status.PENDING
+        )
+        .select_related(
+            "first_transaction",
+            "first_transaction__account",
+            "first_transaction__account__bank",
+            "first_transaction__counterparty",
+            "first_transaction__category",
+            "second_transaction",
+            "second_transaction__account",
+            "second_transaction__account__bank",
+            "second_transaction__counterparty",
+            "second_transaction__category",
+        )
+        .order_by("pk")
+    )
+
+
+def _duplicate_groups_for_filtered_review_ids(filtered_review_ids):
+    filtered_ids = set(filtered_review_ids)
+    if not filtered_ids:
+        return []
+    groups = build_duplicate_review_groups(_all_pending_duplicate_reviews())
+    result = []
+    for group in groups:
+        if not filtered_ids.intersection(group.review_ids):
+            continue
+        result.append(
+            replace(
+                group,
+                fully_matches_filter=set(group.review_ids).issubset(filtered_ids),
+            )
+        )
+    return result
+
+
+def _sort_duplicate_groups(groups, sort):
+    if sort == "confidence_asc":
+        return sorted(groups, key=lambda group: (group.min_confidence, group.seed_review_id))
+    if sort == "newest":
+        return sorted(
+            groups,
+            key=lambda group: max(review.created_at for review in group.reviews),
+            reverse=True,
+        )
+    if sort == "oldest":
+        return sorted(
+            groups,
+            key=lambda group: min(review.created_at for review in group.reviews),
+        )
+    return sorted(groups, key=lambda group: (-group.max_confidence, group.seed_review_id))
+
+
 @login_required
 def duplicate_review_list(request):
     filters = _duplicate_review_filter_state(request.GET)
     queryset = _duplicate_review_queryset(filters)
-    filtered_count = queryset.count()
-    bulk_filtered_count = queryset.filter(
+    pending_pair_count = TransactionDuplicateReview.objects.filter(
         status=TransactionDuplicateReview.Status.PENDING
     ).count()
-    paginator = Paginator(queryset, filters["page_size"])
-    page_obj = paginator.get_page(request.GET.get("page"))
-    pending_count = TransactionDuplicateReview.objects.filter(
-        status=TransactionDuplicateReview.Status.PENDING
-    ).count()
+    pending_groups_all = build_duplicate_review_groups(_all_pending_duplicate_reviews())
+    pending_group_count = len(pending_groups_all)
+
+    if filters["status"] == "pending":
+        filtered_review_ids = list(queryset.values_list("pk", flat=True))
+        groups = _sort_duplicate_groups(
+            _duplicate_groups_for_filtered_review_ids(filtered_review_ids),
+            filters["sort"],
+        )
+        filtered_pair_count = len(filtered_review_ids)
+        filtered_count = len(groups)
+        paginator = Paginator(groups, filters["page_size"])
+        page_obj = paginator.get_page(request.GET.get("page"))
+        context_items = page_obj.object_list
+        grouped_mode = True
+    else:
+        filtered_pair_count = queryset.count()
+        filtered_count = filtered_pair_count
+        paginator = Paginator(queryset, filters["page_size"])
+        page_obj = paginator.get_page(request.GET.get("page"))
+        context_items = page_obj.object_list
+        grouped_mode = False
+
     return render(
         request,
         "finance/duplicate_review_list.html",
         {
-            "reviews": page_obj.object_list,
+            "groups": context_items if grouped_mode else [],
+            # Mantém compatibilidade com testes/extensões que ainda inspecionam
+            # os pares, embora a UI pendente seja agrupada por componente.
+            "reviews": (
+                [review for group in context_items for review in group.reviews]
+                if grouped_mode
+                else context_items
+            ),
+            "grouped_mode": grouped_mode,
             "page_obj": page_obj,
             "is_paginated": page_obj.has_other_pages(),
             "status_filter": filters["status"],
-            "pending_count": pending_count,
+            "pending_count": pending_pair_count,
+            "pending_pair_count": pending_pair_count,
+            "pending_group_count": pending_group_count,
             "filtered_count": filtered_count,
-            "bulk_filtered_count": bulk_filtered_count,
+            "filtered_pair_count": filtered_pair_count,
+            "bulk_filtered_count": filtered_count if grouped_mode else 0,
             "duplicate_filters": filters,
             "banks": Bank.objects.order_by("name"),
+            "categories": Category.objects.filter(is_active=True).order_by("name"),
             "source_filter_choices": _duplicate_source_filter_choices(),
             "classification_choices": TransactionDuplicateReview.Classification.choices,
-            "bulk_action_choices": DuplicateReviewForm.ACTIONS,
+            "bulk_action_choices": DuplicateGroupBulkReviewForm.ACTIONS,
+            "group_action_choices": DuplicateGroupReviewForm.ACTIONS,
         },
     )
 
@@ -658,6 +814,11 @@ def _duplicate_review_filter_state(params):
     except (TypeError, ValueError):
         bank_id = None
 
+    try:
+        category_id = int(params.get("category") or 0) or None
+    except (TypeError, ValueError):
+        category_id = None
+
     valid_sources = {value for value, _label in _duplicate_source_filter_choices()}
     source_a = (params.get("source_a") or "").strip().upper()
     source_b = (params.get("source_b") or "").strip().upper()
@@ -682,6 +843,7 @@ def _duplicate_review_filter_state(params):
         "confidence_min": confidence_min,
         "confidence_max": confidence_max,
         "bank_id": bank_id,
+        "category_id": category_id,
         "source_a": source_a,
         "source_b": source_b,
         "sort": sort,
@@ -715,10 +877,12 @@ def _duplicate_review_queryset(filters):
         "first_transaction__account",
         "first_transaction__account__bank",
         "first_transaction__counterparty",
+        "first_transaction__category",
         "second_transaction",
         "second_transaction__account",
         "second_transaction__account__bank",
         "second_transaction__counterparty",
+        "second_transaction__category",
         "reviewed_by",
     )
 
@@ -738,6 +902,11 @@ def _duplicate_review_queryset(filters):
         queryset = queryset.filter(
             Q(first_transaction__account__bank_id=filters["bank_id"])
             | Q(second_transaction__account__bank_id=filters["bank_id"])
+        )
+    if filters["category_id"]:
+        queryset = queryset.filter(
+            Q(first_transaction__category_id=filters["category_id"])
+            | Q(second_transaction__category_id=filters["category_id"])
         )
     if filters["source_a"]:
         queryset = queryset.filter(_duplicate_source_q("first_transaction", filters["source_a"]))
@@ -783,6 +952,8 @@ def _duplicate_review_redirect_url(params):
             query[key] = value
     if filters["bank_id"]:
         query["bank"] = filters["bank_id"]
+    if filters["category_id"]:
+        query["category"] = filters["category_id"]
     page = _duplicate_bounded_int(params.get("return_page"), minimum=1, maximum=999999, default=None)
     if page:
         query["page"] = page
@@ -797,92 +968,131 @@ def _duplicate_review_form_error_message(form):
     return " ".join(messages_list) or "Não foi possível validar a decisão em lote."
 
 
+def _is_pluggy_transaction(transaction):
+    return (
+        transaction.source_type == Transaction.SourceType.API
+        and (
+            (transaction.fitid or "").startswith("PLUGGY:")
+            or (transaction.fitid or "").startswith("PLUGGY-PROVIDER:")
+        )
+    )
+
+
+def _bulk_group_resolution(group, action):
+    transactions = list(group.transactions)
+    if action == "keep_all":
+        return "keep_all", None
+
+    if action in {"keep_first", "keep_second", "merge_first", "merge_second"}:
+        if len(transactions) != 2:
+            return None
+        index = 0 if action.endswith("first") else 1
+        group_action = "merge_one" if action.startswith("merge") else "keep_one"
+        return group_action, transactions[index].pk
+
+    if action in {"prefer_pluggy", "merge_pluggy"}:
+        candidates = [tx for tx in transactions if _is_pluggy_transaction(tx)]
+        if len(candidates) != 1:
+            return None
+        return ("merge_one" if action == "merge_pluggy" else "keep_one"), candidates[0].pk
+
+    if action in {"prefer_ofx", "merge_ofx"}:
+        candidates = [tx for tx in transactions if tx.source_type == Transaction.SourceType.OFX]
+        if len(candidates) != 1:
+            return None
+        return ("merge_one" if action == "merge_ofx" else "keep_one"), candidates[0].pk
+
+    return None
+
+
 @login_required
 @require_POST
 def duplicate_review_bulk(request):
     return_url = _duplicate_review_redirect_url(request.POST)
-    form = DuplicateBulkReviewForm(request.POST, user=request.user)
+    form = DuplicateGroupBulkReviewForm(request.POST, user=request.user)
     if not form.is_valid():
         messages.error(request, _duplicate_review_form_error_message(form))
         return redirect(return_url)
 
     filters = _duplicate_review_filter_state(request.POST)
     filters["status"] = "pending"
-    eligible = _duplicate_review_queryset(filters).filter(
-        status=TransactionDuplicateReview.Status.PENDING
+    eligible_review_ids = list(
+        _duplicate_review_queryset(filters).values_list("pk", flat=True)
+    )
+    filtered_groups = _sort_duplicate_groups(
+        _duplicate_groups_for_filtered_review_ids(eligible_review_ids),
+        filters["sort"],
     )
 
     if form.cleaned_data["apply_all_filtered"]:
-        candidates = list(
-            eligible.values_list("pk", "first_transaction_id", "second_transaction_id")
-        )
-        selection_label = "resultados filtrados"
+        selected_groups = filtered_groups
+        selection_label = "grupos filtrados"
     else:
-        raw_ids = request.POST.getlist("review_ids")
-        selected_ids = []
-        for raw_id in raw_ids:
+        raw_seed_ids = request.POST.getlist("group_seed_ids")
+        # Compatibilidade com o formulário anterior: um review_id selecionado
+        # é convertido para o grupo ao qual pertence.
+        raw_review_ids = request.POST.getlist("review_ids")
+        selected_values = []
+        for value in [*raw_seed_ids, *raw_review_ids]:
             try:
-                selected_ids.append(int(raw_id))
+                selected_values.append(int(value))
             except (TypeError, ValueError):
                 continue
-        if not selected_ids:
-            messages.warning(request, "Selecione ao menos uma duplicidade para aplicar a decisão em lote.")
-            return redirect(return_url)
-        candidates = list(
-            eligible.filter(pk__in=selected_ids).values_list(
-                "pk", "first_transaction_id", "second_transaction_id"
-            )
-        )
-        selection_label = "pares selecionados"
+        selected_set = set(selected_values)
+        selected_groups = [
+            group
+            for group in filtered_groups
+            if group.seed_review_id in selected_set
+            or bool(selected_set.intersection(group.review_ids))
+        ]
+        selection_label = "grupos selecionados"
 
-    if not candidates:
+    if not selected_groups:
         messages.warning(
             request,
-            "Nenhuma duplicidade pendente corresponde à seleção e aos filtros atuais.",
-        )
-        return redirect(return_url)
-
-    transaction_counts = Counter(
-        transaction_id
-        for _review_id, first_id, second_id in candidates
-        for transaction_id in (first_id, second_id)
-    )
-    overlapping_transaction_ids = {
-        transaction_id for transaction_id, count in transaction_counts.items() if count > 1
-    }
-    safe_ids = [
-        review_id
-        for review_id, first_id, second_id in candidates
-        if first_id not in overlapping_transaction_ids
-        and second_id not in overlapping_transaction_ids
-    ]
-    overlap_skipped = len(candidates) - len(safe_ids)
-
-    if not safe_ids:
-        messages.warning(
-            request,
-            "Nenhum par foi alterado porque todos compartilham movimentações com outro par da mesma seleção. "
-            "Esses casos permanecem pendentes para evitar decisões em lote contraditórias.",
+            "Selecione ao menos um grupo de duplicidade compatível com os filtros atuais.",
         )
         return redirect(return_url)
 
     action = form.cleaned_data["action"]
-    applied_review_ids = []
+    plans = []
+    skipped = 0
+    for group in selected_groups:
+        # Um filtro pode atingir apenas parte das relações de um grupo conectado.
+        # Nunca aplique uma ação em lote ao componente inteiro nesse caso, pois
+        # isso faria uma faixa de 100% decidir também relações de confiança menor.
+        if not getattr(group, "fully_matches_filter", True):
+            skipped += 1
+            continue
+        resolution = _bulk_group_resolution(group, action)
+        if resolution is None:
+            skipped += 1
+            continue
+        group_action, canonical_id = resolution
+        plans.append((group.seed_review_id, group_action, canonical_id))
+
+    if not plans:
+        messages.warning(
+            request,
+            "Nenhum grupo pôde receber essa decisão. Para 'primeira/segunda', o grupo precisa ter exatamente duas movimentações; para preferir uma origem, deve existir exatamente uma movimentação daquela origem no grupo.",
+        )
+        return redirect(return_url)
+
+    applied = 0
+    ignored = 0
+    review_count = 0
     try:
         with db_transaction.atomic():
-            reviews = list(
-                TransactionDuplicateReview.objects.select_for_update()
-                .filter(pk__in=safe_ids, status=TransactionDuplicateReview.Status.PENDING)
-                .order_by("pk")
-            )
-            if len(reviews) != len(safe_ids):
-                raise ValueError(
-                    "A lista de duplicidades mudou enquanto a operação era preparada. "
-                    "Nenhuma decisão foi aplicada; atualize a página e tente novamente."
+            for seed_review_id, group_action, canonical_id in plans:
+                result = review_duplicate_group(
+                    seed_review_id,
+                    action=group_action,
+                    canonical_transaction_id=canonical_id,
+                    user=request.user,
                 )
-            for review in reviews:
-                review_duplicate_pair(review, action=action, user=request.user)
-                applied_review_ids.append(review.pk)
+                applied += 1
+                ignored += result["ignored"]
+                review_count += result["reviews"]
     except (IntegrityError, ValueError) as exc:
         messages.error(
             request,
@@ -891,21 +1101,56 @@ def duplicate_review_bulk(request):
         return redirect(return_url)
 
     request.audit_detail = {
-        "bulk_duplicate_review": True,
+        "bulk_duplicate_group_review": True,
         "decision": action,
-        "applied_count": len(applied_review_ids),
-        "overlap_skipped": overlap_skipped,
+        "applied_groups": applied,
+        "resolved_reviews": review_count,
+        "ignored_transactions": ignored,
+        "skipped_groups": skipped,
         "selection": selection_label,
-        "review_ids": applied_review_ids[:200],
+        "group_seed_ids": [seed for seed, _action, _canonical in plans[:200]],
     }
-    message = f"Decisão em lote aplicada a {len(applied_review_ids)} par(es)."
-    if overlap_skipped:
-        message += (
-            f" {overlap_skipped} par(es) ficaram pendentes porque compartilham movimentações "
-            "com outro par da mesma seleção e precisam de revisão separada."
-        )
+    message = (
+        f"Decisão em lote aplicada a {applied} grupo(s), resolvendo {review_count} sugestão(ões) "
+        f"e desconsiderando {ignored} movimentação(ões) duplicada(s)."
+    )
+    if skipped:
+        message += f" {skipped} grupo(s) foram preservados para revisão individual por serem ambíguos para a ação escolhida."
     messages.success(request, message)
     return redirect(return_url)
+
+
+@login_required
+@require_POST
+def duplicate_review_group(request, seed_review_id):
+    form = DuplicateGroupReviewForm(request.POST, user=request.user)
+    if not form.is_valid():
+        messages.error(request, _duplicate_review_form_error_message(form))
+        return redirect("finance:duplicate-review-list")
+
+    try:
+        result = review_duplicate_group(
+            seed_review_id,
+            action=form.cleaned_data["action"],
+            canonical_transaction_id=form.cleaned_data.get("canonical_transaction_id"),
+            user=request.user,
+        )
+    except (IntegrityError, ValueError) as exc:
+        messages.error(request, str(exc))
+        return redirect("finance:duplicate-review-list")
+
+    request.audit_detail = {
+        "duplicate_group_review": True,
+        "seed_review_id": seed_review_id,
+        "decision": form.cleaned_data["action"],
+        "canonical_transaction_id": form.cleaned_data.get("canonical_transaction_id"),
+        **result,
+    }
+    messages.success(
+        request,
+        f"Grupo resolvido: {result['transactions']} movimentação(ões), {result['reviews']} sugestão(ões) de duplicidade tratadas.",
+    )
+    return redirect("finance:duplicate-review-list")
 
 
 @login_required
@@ -917,6 +1162,7 @@ def duplicate_review_detail(request, pk):
             "first_transaction__account",
             "first_transaction__account__bank",
             "first_transaction__counterparty",
+            "first_transaction__category",
             "second_transaction",
             "second_transaction__account",
             "second_transaction__account__bank",
@@ -1574,9 +1820,13 @@ def internal_transfer_list(request):
     }
 
     if status not in valid_statuses:
-        status = (
-            InternalTransfer.Status.POSSIBLE
-        )
+        status = InternalTransfer.Status.POSSIBLE
+
+    bank_id = request.GET.get("bank", "").strip()
+    try:
+        parsed_bank_id = int(bank_id) if bank_id else None
+    except (TypeError, ValueError):
+        parsed_bank_id = None
 
     transfers = (
         InternalTransfer.objects.select_related(
@@ -1590,26 +1840,35 @@ def internal_transfer_list(request):
             "credit_transaction__counterparty",
             "reviewed_by",
         )
-        .filter(
-            status=status
-        )
-        .order_by(
-            "-confidence",
-            "-created_at",
-        )[:500]
+        .filter(status=status)
     )
+    if parsed_bank_id:
+        transfers = transfers.filter(
+            Q(debit_transaction__account__bank_id=parsed_bank_id)
+            | Q(credit_transaction__account__bank_id=parsed_bank_id)
+        )
 
+    transfers = transfers.order_by("-confidence", "-created_at")[:500]
+
+    counts_queryset = InternalTransfer.objects.all()
+    if parsed_bank_id:
+        counts_queryset = counts_queryset.filter(
+            Q(debit_transaction__account__bank_id=parsed_bank_id)
+            | Q(credit_transaction__account__bank_id=parsed_bank_id)
+        )
     counts = {
         item["status"]: item["total"]
-        for item in (
-            InternalTransfer.objects.values(
-                "status"
-            )
-            .annotate(
-                total=Count("id")
-            )
-        )
+        for item in counts_queryset.values("status").annotate(total=Count("id"))
     }
+
+    internal_balance_queryset = Transaction.objects.filter(
+        is_internal_balance_movement=True,
+        is_financially_ignored=False,
+    )
+    if parsed_bank_id:
+        internal_balance_queryset = internal_balance_queryset.filter(
+            account__bank_id=parsed_bank_id
+        )
 
     return render(
         request,
@@ -1617,21 +1876,13 @@ def internal_transfer_list(request):
         {
             "transfers": transfers,
             "status_filter": status,
-            "status_choices": (
-                InternalTransfer.Status.choices
-            ),
-            "possible_count": counts.get(
-                InternalTransfer.Status.POSSIBLE,
-                0,
-            ),
-            "confirmed_count": counts.get(
-                InternalTransfer.Status.CONFIRMED,
-                0,
-            ),
-            "rejected_count": counts.get(
-                InternalTransfer.Status.REJECTED,
-                0,
-            ),
+            "status_choices": InternalTransfer.Status.choices,
+            "possible_count": counts.get(InternalTransfer.Status.POSSIBLE, 0),
+            "confirmed_count": counts.get(InternalTransfer.Status.CONFIRMED, 0),
+            "rejected_count": counts.get(InternalTransfer.Status.REJECTED, 0),
+            "banks": Bank.objects.order_by("name"),
+            "bank_filter": parsed_bank_id,
+            "internal_balance_count": internal_balance_queryset.count(),
         },
     )
 
@@ -1639,18 +1890,20 @@ def internal_transfer_list(request):
 @login_required
 @require_POST
 def internal_transfer_analyze(request):
-    result = (
-        analyze_internal_transfers()
-    )
+    # Classify same-account balance movements first so Cofrinho/reserva rows
+    # never become candidates for cross-account matching in the same run.
+    balance_result = analyze_internal_balance_movements()
+    result = analyze_internal_transfers()
 
     messages.success(
         request,
         (
             "Análise concluída: "
-            f"{result['confirmed']} confirmada(s) automaticamente, "
-            f"{result['possible']} possível(is) para revisão e "
-            f"{result['skipped_ambiguous']} candidato(s) ambíguo(s) "
-            "mantido(s) sem vínculo."
+            f"{result['confirmed']} transferência(s) entre contas confirmada(s), "
+            f"{result['possible']} possível(is) para revisão, "
+            f"{result['skipped_ambiguous']} ambígua(s) sem vínculo e "
+            f"{balance_result['detected']} movimentação(ões) entre saldo/cofrinho "
+            "classificada(s) como interna(s)."
         ),
     )
 

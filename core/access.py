@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import wraps
 
+from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 
@@ -25,6 +26,22 @@ def user_role(user) -> str:
 
 def user_is_system_admin(user) -> bool:
     return user_role(user) == UserAccessProfile.Role.ADMIN
+
+
+def active_system_admin_exists() -> bool:
+    """Retorna True quando existe ao menos um administrador ativo do sistema."""
+    user_model = get_user_model()
+
+    if user_model._default_manager.filter(
+        is_active=True,
+        is_superuser=True,
+    ).exists():
+        return True
+
+    return user_model._default_manager.filter(
+        is_active=True,
+        access_profile__role=UserAccessProfile.Role.ADMIN,
+    ).exists()
 
 
 def system_admin_required(view_func):

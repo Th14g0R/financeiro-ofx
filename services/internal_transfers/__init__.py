@@ -6,6 +6,9 @@ from .matcher import reopen_internal_transfer
 from .queries import annotate_financial_scope
 from .queries import confirmed_internal_q
 from .queries import possible_internal_q
+from .same_account import analyze_internal_balance_movements
+from .same_account import apply_internal_balance_classification
+from .same_account import classify_internal_balance_movement
 
 
 __all__ = [
@@ -17,4 +20,7 @@ __all__ = [
     "annotate_financial_scope",
     "confirmed_internal_q",
     "possible_internal_q",
+    "analyze_internal_balance_movements",
+    "apply_internal_balance_classification",
+    "classify_internal_balance_movement",
 ]

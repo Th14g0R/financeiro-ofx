@@ -111,6 +111,46 @@ class PluggySyncTests(TestCase):
         self.assertEqual(PluggyTransactionLink.objects.count(), 1)
 
     @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_payment_details_and_yield_type_are_preserved(self, mocked):
+        Bank.objects.create(name="Caixa", code="104")
+        mocked.return_value = [{
+            "id": "33333333-3333-3333-3333-333333333399",
+            "providerId": "provider-yield-payment-1",
+            "date": "2026-09-08T12:00:00.000Z",
+            "description": "Rendimento do Cofrinho 100% CDI",
+            "amount": 1.75,
+            "type": "CREDIT",
+            "status": "POSTED",
+            "currencyCode": "BRL",
+            "paymentData": {
+                "paymentMethod": "PIX",
+                "referenceNumber": "E123456",
+                "payer": {
+                    "name": "MERCADO PAGO",
+                    "branchNumber": "0001",
+                    "accountNumber": "123456-7",
+                    "routingNumber": "104",
+                    "routingNumberISPB": "00360305",
+                },
+                "receiver": {
+                    "name": "THIAGO TESTE",
+                    "accountNumber": "765432-1",
+                },
+            },
+        }]
+
+        result = sync_account_transactions(self.remote, user=self.user)
+
+        self.assertEqual(result["created"], 1)
+        tx = Transaction.objects.get(fitid="PLUGGY-PROVIDER:provider-yield-payment-1")
+        self.assertEqual(tx.transaction_type, Transaction.TransactionType.INTEREST)
+        self.assertEqual(tx.payment_details["payment_method"], "PIX")
+        self.assertEqual(tx.payment_details["reference_number"], "E123456")
+        self.assertEqual(tx.payment_details["payer"]["bank_name"], "Caixa")
+        self.assertEqual(tx.payment_details["payer"]["account_number"], "123456-7")
+        self.assertFalse(tx.is_internal_balance_movement)
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
     def test_pending_transaction_is_not_written(self, mocked):
         mocked.return_value = [{
             "id": "44444444-4444-4444-4444-444444444444",
@@ -1047,6 +1087,10 @@ class PluggyAccountSimilarityAndIdentityTests(TestCase):
         self.assertIsNotNone(tx.counterparty_id)
         self.assertEqual(tx.counterparty_raw_name, "JOAO BARBOSA DE SOUSA")
         self.assertEqual(tx.counterparty.tax_id, "12345678909")
+        self.assertEqual(tx.payment_details["receiver"]["name"], "JOAO BARBOSA DE SOUSA")
+        self.assertEqual(tx.payment_details["receiver"]["routing_number"], "104")
+        self.assertEqual(tx.payment_details["receiver"]["routing_number_ispb"], "00360305")
+        self.assertEqual(tx.payment_details["receiver"]["document_number"], "123.456.789-09")
 
 
 class PluggySimilarityDecisionRegressionTests(TestCase):
@@ -1152,3 +1196,93 @@ class PluggySimilarityDecisionRegressionTests(TestCase):
         self.assertIn(self.item.item_id, message)
         self.assertIn("dados já copiados", message)
         self.assertIn("mesma aplicação/credenciais", message)
+
+
+class PluggyTransactionCategoryTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="pluggy-category-user",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.config = PluggyConfiguration(name="Pluggy", client_id="client-category")
+        self.config.set_client_secret("secret")
+        self.config.save()
+        self.item = PluggyItem.objects.create(
+            configuration=self.config,
+            item_id="aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb",
+            connector_name="Nubank",
+            status="UPDATED",
+        )
+        self.bank = Bank.objects.create(name="Banco Categoria", code="263")
+        self.local = Account.objects.create(
+            bank=self.bank,
+            nickname="Conta Categoria",
+            branch="0001",
+            number="998877",
+            digit="6",
+        )
+        self.remote = PluggyAccount.objects.create(
+            item=self.item,
+            pluggy_account_id="cccccccc-1111-2222-3333-dddddddddddd",
+            local_account=self.local,
+            remote_type="BANK",
+            subtype="CHECKING_ACCOUNT",
+            name="Conta Corrente",
+            currency="BRL",
+        )
+
+    def _payload(self, *, category="Shopping", category_id="07000000"):
+        return {
+            "id": "eeeeeeee-1111-2222-3333-ffffffffffff",
+            "providerId": "provider-category-1",
+            "date": "2026-09-09T12:00:00.000Z",
+            "description": "Compra no débito ACME",
+            "amount": -25.50,
+            "type": "DEBIT",
+            "status": "POSTED",
+            "currencyCode": "BRL",
+            "category": category,
+            "categoryId": category_id,
+        }
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_pluggy_category_is_created_and_assigned_locally(self, mocked):
+        mocked.return_value = [self._payload()]
+
+        sync_account_transactions(self.remote, user=self.user)
+
+        tx = Transaction.objects.get(fitid="PLUGGY-PROVIDER:provider-category-1")
+        self.assertEqual(tx.category.name, "Shopping")
+        self.assertEqual(tx.source_category_name, "Shopping")
+        self.assertEqual(tx.source_category_id, "07000000")
+        self.assertEqual(
+            tx.category_assignment_source,
+            Transaction.CategoryAssignmentSource.PLUGGY,
+        )
+
+    @patch("integrations.pluggy_sync.list_all_transactions")
+    def test_manual_local_category_is_not_overwritten_by_next_pluggy_sync(self, mocked):
+        from finance.models import Category
+
+        mocked.return_value = [self._payload()]
+        sync_account_transactions(self.remote, user=self.user)
+        tx = Transaction.objects.get(fitid="PLUGGY-PROVIDER:provider-category-1")
+        manual = Category.objects.create(
+            name="Minha categoria",
+            category_type=Category.CategoryType.BOTH,
+        )
+        tx.category = manual
+        tx.category_assignment_source = Transaction.CategoryAssignmentSource.MANUAL
+        tx.save(update_fields=["category", "category_assignment_source", "updated_at"])
+
+        mocked.return_value = [self._payload(category="Electronics", category_id="07020000")]
+        sync_account_transactions(self.remote, user=self.user)
+
+        tx.refresh_from_db()
+        self.assertEqual(tx.category_id, manual.pk)
+        self.assertEqual(tx.source_category_name, "Electronics")
+        self.assertEqual(tx.source_category_id, "07020000")
+        self.assertEqual(
+            tx.category_assignment_source,
+            Transaction.CategoryAssignmentSource.MANUAL,
+        )

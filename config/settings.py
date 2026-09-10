@@ -103,7 +103,7 @@ AUTH_PASSWORD_VALIDATORS = [
             "MinimumLengthValidator"
         ),
         "OPTIONS": {
-            "min_length": 12,
+            "min_length": 8,
         },
     },
     {

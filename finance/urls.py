@@ -15,9 +15,11 @@ from .views import counterparty_rebuild
 from .views import TransactionCreateView
 from .views import TransactionListView
 from .views import TransactionUpdateView
+from .views import transaction_category_update
 from .views import duplicate_analyze
 from .views import duplicate_review_bulk
 from .views import duplicate_review_detail
+from .views import duplicate_review_group
 from .views import duplicate_review_list
 from .views import account_toggle_active
 from .views import bank_toggle_active
@@ -145,6 +147,11 @@ path(
         name="duplicate-review-bulk",
     ),
     path(
+        "transactions/duplicates/group/<int:seed_review_id>/",
+        duplicate_review_group,
+        name="duplicate-review-group",
+    ),
+    path(
         "transactions/duplicates/<int:pk>/",
         duplicate_review_detail,
         name="duplicate-review-detail",
@@ -158,6 +165,11 @@ path(
         "transactions/<int:pk>/edit/",
         TransactionUpdateView.as_view(),
         name="transaction-update",
+    ),
+    path(
+        "transactions/<int:pk>/category/",
+        transaction_category_update,
+        name="transaction-category-update",
     ),
     path(
         "ofx/preview/",

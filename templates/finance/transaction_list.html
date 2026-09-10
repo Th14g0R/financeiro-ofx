@@ -51,7 +51,7 @@
                         name="q"
                         value="{{ query }}"
                         class="form-control"
-                        placeholder="Descrição, documento, FITID, conta ou banco"
+                        placeholder="Descrição, pessoa, documento, FITID, conta ou banco"
                     >
                 </div>
 
@@ -125,6 +125,21 @@
                                 {% if source_filter == value %}selected{% endif %}
                             >
                                 {{ label }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-6 col-xl-2">
+                    <label for="category" class="form-label">Categoria</label>
+                    <select id="category" name="category" class="form-select">
+                        <option value="">Todas</option>
+                        {% for category in categories %}
+                            <option
+                                value="{{ category.pk }}"
+                                {% if category_filter == category.pk|stringformat:"s" %}selected{% endif %}
+                            >
+                                {{ category.name }}
                             </option>
                         {% endfor %}
                     </select>
@@ -241,6 +256,7 @@
                         <th><a class="table-sort-link" href="{% sort_url 'description' %}">Descrição <span class="sort-icon">{% sort_icon 'description' %}</span></a></th>
                         <th><a class="table-sort-link" href="{% sort_url 'type' %}">Tipo <span class="sort-icon">{% sort_icon 'type' %}</span></a></th>
                         <th><a class="table-sort-link" href="{% sort_url 'source' %}">Origem <span class="sort-icon">{% sort_icon 'source' %}</span></a></th>
+                        <th><a class="table-sort-link" href="{% sort_url 'category' %}">Categoria <span class="sort-icon">{% sort_icon 'category' %}</span></a></th>
                         <th><a class="table-sort-link" href="{% sort_url 'scope' %}">Classificação <span class="sort-icon">{% sort_icon 'scope' %}</span></a></th>
                         <th class="text-end"><a class="table-sort-link" href="{% sort_url 'amount' %}">Valor <span class="sort-icon">{% sort_icon 'amount' %}</span></a></th>
                         <th class="text-end">Ações</th>
@@ -268,6 +284,13 @@
                             <div class="small text-secondary">
                                 {{ transaction.account.nickname }}
                             </div>
+                            {% if transaction.account.branch or transaction.account.number %}
+                                <div class="small text-secondary">
+                                    {% if transaction.account.branch %}Ag. {{ transaction.account.branch }}{% endif %}
+                                    {% if transaction.account.branch and transaction.account.number %} · {% endif %}
+                                    {% if transaction.account.number %}Conta {{ transaction.account.number }}{% if transaction.account.digit %}-{{ transaction.account.digit }}{% endif %}{% endif %}
+                                </div>
+                            {% endif %}
                         </td>
 
                         <td class="transaction-description">
@@ -276,7 +299,8 @@
                             </div>
 
                             {% if transaction.counterparty %}
-                                <div class="small">
+                                <div class="small mt-1">
+                                    <span class="text-secondary">Pessoa:</span>
                                     <a
                                         href="{% url 'finance:counterparty-detail' transaction.counterparty.pk %}"
                                         class="text-decoration-none"
@@ -286,8 +310,65 @@
                                 </div>
                             {% endif %}
 
+                            {% if transaction.payment_details %}
+                                <div class="small border-start ps-2 mt-2">
+                                    {% if transaction.payment_method %}
+                                        <div><span class="text-secondary">Meio:</span> {{ transaction.payment_method }}</div>
+                                    {% endif %}
+                                    {% with payer=transaction.payment_payer receiver=transaction.payment_receiver %}
+                                        {% if payer %}
+                                            <div class="mt-1">
+                                                <span class="text-secondary">Origem:</span>
+                                                {% if payer.name %}<strong>{{ payer.name }}</strong>{% endif %}
+                                                {% if payer.bank_name %} · {{ payer.bank_name }}{% elif payer.routing_number %} · COMPE {{ payer.routing_number }}{% endif %}
+                                                {% if payer.branch_number %} · ag. {{ payer.branch_number }}{% endif %}
+                                                {% if payer.account_number %} · conta {{ payer.account_number }}{% endif %}
+                                            </div>
+                                            {% if payer.document_number or payer.routing_number_ispb %}
+                                                <div class="text-secondary">
+                                                    {% if payer.document_number %}{{ payer.document_type|default:"Documento" }} {{ payer.document_number }}{% endif %}
+                                                    {% if payer.document_number and payer.routing_number_ispb %} · {% endif %}
+                                                    {% if payer.routing_number_ispb %}ISPB {{ payer.routing_number_ispb }}{% endif %}
+                                                </div>
+                                            {% endif %}
+                                        {% endif %}
+                                        {% if receiver %}
+                                            <div class="mt-1">
+                                                <span class="text-secondary">Destino:</span>
+                                                {% if receiver.name %}<strong>{{ receiver.name }}</strong>{% endif %}
+                                                {% if receiver.bank_name %} · {{ receiver.bank_name }}{% elif receiver.routing_number %} · COMPE {{ receiver.routing_number }}{% endif %}
+                                                {% if receiver.branch_number %} · ag. {{ receiver.branch_number }}{% endif %}
+                                                {% if receiver.account_number %} · conta {{ receiver.account_number }}{% endif %}
+                                            </div>
+                                            {% if receiver.document_number or receiver.routing_number_ispb %}
+                                                <div class="text-secondary">
+                                                    {% if receiver.document_number %}{{ receiver.document_type|default:"Documento" }} {{ receiver.document_number }}{% endif %}
+                                                    {% if receiver.document_number and receiver.routing_number_ispb %} · {% endif %}
+                                                    {% if receiver.routing_number_ispb %}ISPB {{ receiver.routing_number_ispb }}{% endif %}
+                                                </div>
+                                            {% endif %}
+                                        {% endif %}
+                                    {% endwith %}
+                                    {% if transaction.payment_reference_number %}
+                                        <div><span class="text-secondary">Referência:</span> {{ transaction.payment_reference_number }}</div>
+                                    {% endif %}
+                                    {% if transaction.payment_details.receiver_reference_id %}
+                                        <div><span class="text-secondary">Ref. recebedor:</span> {{ transaction.payment_details.receiver_reference_id }}</div>
+                                    {% endif %}
+                                    {% if transaction.payment_details.authentication_code %}
+                                        <div><span class="text-secondary">Autenticação:</span> {{ transaction.payment_details.authentication_code }}</div>
+                                    {% endif %}
+                                    {% if transaction.payment_pix_key %}
+                                        <div><span class="text-secondary">Chave PIX:</span> {{ transaction.payment_pix_key }}</div>
+                                    {% endif %}
+                                    {% if transaction.payment_details.reason %}
+                                        <div><span class="text-secondary">Motivo:</span> {{ transaction.payment_details.reason }}</div>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+
                             {% if transaction.fitid %}
-                                <div class="small text-secondary">
+                                <div class="small text-secondary mt-1">
                                     FITID: {{ transaction.fitid }}
                                 </div>
                             {% endif %}
@@ -301,15 +382,44 @@
                             {{ transaction.get_source_type_display }}
                         </td>
 
+                        <td style="min-width: 220px;">
+                            <form method="post" action="{% url 'finance:transaction-category-update' transaction.pk %}" class="d-flex gap-1 align-items-center">
+                                {% csrf_token %}
+                                <input type="hidden" name="next" value="{{ request.get_full_path }}">
+                                <select name="category" class="form-select form-select-sm" aria-label="Categoria da movimentação {{ transaction.pk }}">
+                                    <option value="">Sem categoria</option>
+                                    {% for category in categories %}
+                                        {% if category.category_type == "BOTH" or category.category_type == "INCOME" and transaction.direction == "CREDIT" or category.category_type == "EXPENSE" and transaction.direction == "DEBIT" %}
+                                            <option value="{{ category.pk }}" {% if transaction.category_id == category.pk %}selected{% endif %}>{{ category.name }}</option>
+                                        {% endif %}
+                                    {% endfor %}
+                                </select>
+                                <button class="btn btn-sm btn-outline-primary" type="submit">Salvar</button>
+                            </form>
+                            {% if transaction.source_category_name %}
+                                <div class="small text-secondary mt-1">
+                                    Origem: {{ transaction.source_category_name }}{% if transaction.source_category_id %} · {{ transaction.source_category_id }}{% endif %}
+                                    {% if transaction.category_assignment_source == "MANUAL" %} · ajustada manualmente{% endif %}
+                                </div>
+                            {% endif %}
+                        </td>
+
                         <td>
                             {% if transaction.is_financially_ignored %}
                                 <span class="badge text-bg-secondary mb-1">Desconsiderada nos totais</span><br>
                             {% elif transaction.has_pending_duplicate %}
                                 <span class="badge text-bg-warning mb-1">Possível duplicidade</span><br>
                             {% endif %}
-                            {% if transaction.is_internal_transfer %}
+                            {% if transaction.is_internal_balance_movement %}
                                 <span class="badge text-bg-info">
-                                    Transferência interna
+                                    Cofrinho/reserva · interna
+                                </span>
+                                {% if transaction.internal_balance_reason %}
+                                    <div class="small text-secondary mt-1">{{ transaction.internal_balance_reason }}</div>
+                                {% endif %}
+                            {% elif transaction.is_internal_transfer %}
+                                <span class="badge text-bg-info">
+                                    Transferência entre minhas contas
                                 </span>
                             {% elif transaction.is_possible_internal_transfer %}
                                 <span class="badge text-bg-warning">
@@ -348,7 +458,7 @@
                     </tr>
                 {% empty %}
                     <tr>
-                        <td colspan="8" class="text-center py-5 text-secondary">
+                        <td colspan="9" class="text-center py-5 text-secondary">
                             Nenhuma movimentação encontrada.
                         </td>
                     </tr>

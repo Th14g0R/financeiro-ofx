@@ -4,6 +4,8 @@ from django.test import SimpleTestCase
 from django.test import TestCase
 from django.urls import reverse
 
+from core.models import UserAccessProfile
+
 
 class HomeAuthenticationTests(TestCase):
     def test_home_requires_authentication(self):
@@ -366,6 +368,8 @@ class SecureLoginThrottleTests(TestCase):
             username="secure-login-user",
             password="correct-password-123",
         )
+        self.user.access_profile.role = UserAccessProfile.Role.ADMIN
+        self.user.access_profile.save(update_fields=["role", "updated_at"])
 
     def test_repeated_invalid_login_is_throttled(self):
         from django.test import override_settings
@@ -445,6 +449,8 @@ class AccountRecoveryTests(TestCase):
             email="thiago@example.com",
             password="Correct-password-123!",
         )
+        self.user.access_profile.role = UserAccessProfile.Role.ADMIN
+        self.user.access_profile.save(update_fields=["role", "updated_at"])
 
     def test_login_accepts_username_with_different_case(self):
         response = self.client.post(
@@ -623,3 +629,27 @@ class AccountRecoveryTests(TestCase):
         self.assertFalse(
             LoginThrottleBucket.objects.exists()
         )
+
+
+class PasswordLengthPolicyTests(TestCase):
+    def test_logged_user_can_change_to_valid_eight_character_password(self):
+        from django.contrib.auth import get_user_model
+
+        user = get_user_model().objects.create_user(
+            username="password-eight-user",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.client.force_login(user)
+
+        response = self.client.post(
+            reverse("password_change"),
+            {
+                "old_password": "Senha-Muito-Forte-123!",
+                "new_password1": "Ax7!pq9Z",
+                "new_password2": "Ax7!pq9Z",
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password("Ax7!pq9Z"))

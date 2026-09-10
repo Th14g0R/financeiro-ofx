@@ -318,3 +318,81 @@ class FinanceAuthenticatedViewsTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
+
+
+class TransactionCategoryInteractionTests(TestCase):
+    def setUp(self):
+        self.user = get_user_model().objects.create_user(
+            username="category-editor",
+            password="Senha-Muito-Forte-123!",
+        )
+        self.client.force_login(self.user)
+        self.bank = Bank.objects.create(name="Banco Categorias", code="262")
+        self.account = Account.objects.create(
+            bank=self.bank,
+            nickname="Principal",
+            branch="0001",
+            number="456789",
+            digit="0",
+        )
+        self.shopping = Category.objects.create(
+            name="Shopping",
+            category_type=Category.CategoryType.BOTH,
+        )
+        self.services = Category.objects.create(
+            name="Services",
+            category_type=Category.CategoryType.BOTH,
+        )
+        self.tx_shopping = Transaction.objects.create(
+            account=self.account,
+            posted_at=timezone.now(),
+            amount=Decimal("12.00"),
+            direction=Transaction.Direction.DEBIT,
+            transaction_type=Transaction.TransactionType.OTHER,
+            source_type=Transaction.SourceType.API,
+            fitid="PLUGGY:CATEGORY-UI-1",
+            raw_description="Compra loja",
+            category=self.shopping,
+            category_assignment_source=Transaction.CategoryAssignmentSource.PLUGGY,
+            source_category_name="Shopping",
+        )
+        self.tx_services = Transaction.objects.create(
+            account=self.account,
+            posted_at=timezone.now(),
+            amount=Decimal("20.00"),
+            direction=Transaction.Direction.DEBIT,
+            transaction_type=Transaction.TransactionType.OTHER,
+            source_type=Transaction.SourceType.API,
+            fitid="PLUGGY:CATEGORY-UI-2",
+            raw_description="Serviço",
+            category=self.services,
+        )
+
+    def test_transaction_list_can_filter_by_category(self):
+        response = self.client.get(
+            reverse("finance:transaction-list"),
+            {"category": str(self.shopping.pk)},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        rows = list(response.context["transactions"])
+        self.assertEqual([row.pk for row in rows], [self.tx_shopping.pk])
+
+    def test_imported_transaction_category_can_be_changed_without_editing_financial_fields(self):
+        response = self.client.post(
+            reverse("finance:transaction-category-update", args=[self.tx_shopping.pk]),
+            {
+                "category": str(self.services.pk),
+                "next": reverse("finance:transaction-list"),
+            },
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.tx_shopping.refresh_from_db()
+        self.assertEqual(self.tx_shopping.category_id, self.services.pk)
+        self.assertEqual(
+            self.tx_shopping.category_assignment_source,
+            Transaction.CategoryAssignmentSource.MANUAL,
+        )
+        self.assertEqual(self.tx_shopping.amount, Decimal("12.00"))
+        self.assertEqual(self.tx_shopping.fitid, "PLUGGY:CATEGORY-UI-1")

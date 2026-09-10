@@ -1,10 +1,60 @@
-# Financeiro OFX — Etapa 10.9.8.1
+# Financeiro OFX — Etapa 10.9.10
+
+
+> Etapa 10.9.10: torna a data local obrigatória na sugestão de duplicidades, usa o horário como evidência adicional quando disponível, importa categorias retornadas pela Pluggy sem sobrescrever ajustes manuais, adiciona filtro/edição rápida de categoria no extrato e reduz a senha mínima para 8 caracteres.
+
+## Etapa 10.9.10 — duplicidade por data/hora e categorias Pluggy
+
+- Duas movimentações com datas locais diferentes deixam de ser candidatas a duplicidade, mesmo que banco, valor e descrição coincidam.
+- Quando ambas as fontes possuem horário real, horários iguais ou próximos aumentam a confiança; diferença superior a 1 hora elimina a candidatura. OFX sem horário continua compatível com Pluggy no mesmo dia sem ser penalizado por `00:00`.
+- O matcher usa também a contraparte estruturada de `paymentData` para diferenciar transferências de mesmo valor destinadas a pessoas diferentes.
+- Categorias retornadas pela Pluggy (`category`/`categoryId`, com fallback para `merchant.category`) são preservadas na movimentação e criadas como categorias locais quando necessário.
+- Ajustes manuais de categoria no Financeiro OFX têm prioridade e não são sobrescritos por sincronizações posteriores da Pluggy.
+- O Extrato e a Revisão de duplicidades ganham filtro por categoria; o Extrato permite alterar somente a categoria de qualquer lançamento, inclusive importado, sem liberar edição de valor/data/FITID.
+- A senha mínima passa de 12 para 8 caracteres; os validadores de senha comum, totalmente numérica e similaridade com dados do usuário continuam ativos.
+- Nova migration `finance.0009_transaction_source_category`.
+
+> Hotfix 10.9.9.1: inclui a migration `imports.0008_alter_importitem_transaction_type`, necessária para manter o estado de migrations sincronizado após a alteração do rótulo `INTEREST` para `Rendimento / juros`.
 
 
 
 
 
 
+
+
+
+
+## Etapa 10.9.9 — duplicidades agrupadas, Cofrinho e detalhes bancários Pluggy
+
+- Sugestões pendentes de duplicidade passam a ser agrupadas por componente: uma mesma movimentação aparece uma única vez dentro do grupo, mesmo quando havia vários pares envolvendo o mesmo lançamento.
+- A resolução individual e em lote passa a operar por grupo, impedindo que a mesma transação seja mantida/mesclada/desconsiderada mais de uma vez na mesma decisão.
+- O matcher deixa de sugerir, como duplicidades, operações da mesma origem com FITIDs diferentes e reforça a comparação de contraparte; descrições compactas Pluggy como `Transferência Recebida|Nome` são interpretadas antes da comparação.
+- Ao executar **Analisar novamente**, sugestões pendentes antigas que não atendem mais ao matcher atual são removidas; quarentenas criadas apenas por essas sugestões são revertidas.
+- Movimentações entre saldo disponível e **Cofrinho/reserva da mesma conta** podem ser classificadas como internas e deixam de compor entrada/saída externa do Dashboard. Rendimentos/juros/CDI permanecem como receita real e são classificados como `Rendimento / juros`.
+- O extrato passa a preservar e exibir, quando fornecidos pela Pluggy, pagador, recebedor, banco/COMPE, agência, conta, documento, ISPB, meio/referência do pagamento e chave PIX quando ela existir explicitamente no payload.
+- A tela de transferências internas recebe filtro por banco e atalho para os movimentos de Cofrinho/reserva.
+- Nova migration `finance.0008_transaction_payment_details_and_internal_balance`.
+
+## Hotfix 10.9.8.3 — auditoria de segurança do primeiro acesso
+
+- Remove o uso explícito de `|safe` do template de criação do administrador inicial.
+- Mantém o autoescape padrão do Django ativo para os textos auxiliares do formulário.
+- Evita o achado `TPL001` de severidade ALTA na auditoria local.
+- Adiciona teste de regressão para impedir reintrodução de `|safe`/`autoescape off` nos templates.
+- Não altera banco de dados e não possui migration nova.
+
+## Etapa 10.9.8.2 — administrador inicial criado pelo próprio site
+
+- Em uma instalação nova, não é mais necessário executar `manage.py createsuperuser`.
+- Ao abrir `http://127.0.0.1:8000/`, o login detecta quando não existe administrador ativo e encaminha para **Primeiro acesso**.
+- O formulário solicita nome, sobrenome, usuário, e-mail de recuperação e senha/confirmação; a senha usa os validadores configurados do Django.
+- O primeiro usuário é criado como administrador do sistema, `is_staff=True` e `is_superuser=True`, recebe o perfil `ADMIN` e já entra automaticamente após o cadastro.
+- A criação inicial é permitida **somente a partir do próprio computador (loopback)**, reduzindo o risco de tomada do primeiro administrador por outro equipamento da LAN.
+- Se já existir administrador ativo, a rota de primeiro acesso é fechada automaticamente.
+- Se uma base anormalmente ficar sem administrador, o mesmo fluxo local permite restaurar a administração criando uma nova conta administrativa, sem usar terminal.
+- O evento de criação do administrador inicial fica registrado em auditoria sem armazenar senha.
+- Não há migration nova nesta etapa.
 
 ## Hotfix 10.9.8.1 — snapshots de data/hora com fuso horário
 

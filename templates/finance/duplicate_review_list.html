@@ -7,7 +7,7 @@
     <div>
       <h1 class="h3 mb-1">Revisão de duplicidades</h1>
       <p class="text-secondary mb-0">
-        Compare OFX, PDF, API/Pluggy e outras origens. As decisões não apagam o histórico financeiro.
+        Sugestões pendentes são agrupadas por movimentação. A mesma transação aparece uma única vez por grupo, evitando decisões contraditórias.
       </p>
     </div>
     <div class="d-flex flex-wrap gap-2">
@@ -29,7 +29,7 @@
         <div class="col-6 col-md-3 col-xl-2">
           <label for="filter-status" class="form-label">Situação</label>
           <select id="filter-status" class="form-select" name="status">
-            <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>Pendentes</option>
+            <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>Pendentes agrupadas</option>
             <option value="reviewed" {% if status_filter == 'reviewed' %}selected{% endif %}>Revisadas</option>
             <option value="all" {% if status_filter == 'all' %}selected{% endif %}>Todas</option>
           </select>
@@ -52,11 +52,21 @@
           <input id="filter-confidence-max" class="form-control" type="number" name="confidence_max" min="0" max="100" value="{% if duplicate_filters.confidence_max is not None %}{{ duplicate_filters.confidence_max }}{% endif %}" placeholder="100">
         </div>
         <div class="col-12 col-md-6 col-xl-3">
-          <label for="filter-bank" class="form-label">Banco em A ou B</label>
+          <label for="filter-bank" class="form-label">Banco</label>
           <select id="filter-bank" class="form-select" name="bank">
-            <option value="">Todos</option>
+            <option value="">Todos os bancos</option>
             {% for bank in banks %}
             <option value="{{ bank.pk }}" {% if duplicate_filters.bank_id == bank.pk %}selected{% endif %}>{{ bank.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12 col-md-6 col-xl-3">
+          <label for="filter-category" class="form-label">Categoria</label>
+          <select id="filter-category" class="form-select" name="category">
+            <option value="">Todas as categorias</option>
+            {% for category in categories %}
+            <option value="{{ category.pk }}" {% if duplicate_filters.category_id == category.pk %}selected{% endif %}>{{ category.name }}</option>
             {% endfor %}
           </select>
         </div>
@@ -115,15 +125,20 @@
   <div class="card border-0 shadow-sm mb-4">
     <div class="card-body d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-lg-center">
       <div>
-        <strong>{{ pending_count }}</strong> par(es) pendente(s) no total.
-        <span class="text-secondary ms-lg-2"><strong>{{ filtered_count }}</strong> resultado(s) no filtro atual.</span>
+        {% if grouped_mode %}
+          <strong>{{ pending_group_count }}</strong> grupo(s) pendente(s), formados por <strong>{{ pending_pair_count }}</strong> relação(ões) de similaridade.
+          <span class="text-secondary ms-lg-2"><strong>{{ filtered_count }}</strong> grupo(s) no filtro atual.</span>
+        {% else %}
+          <strong>{{ filtered_count }}</strong> revisão(ões) no filtro atual.
+        {% endif %}
       </div>
       <div class="small text-secondary">
-        A e B indicam a posição exibida no par. Use os filtros de origem antes de uma decisão em lote quando quiser priorizar OFX ou Pluggy.
+        Ao resolver um grupo, cada movimentação é tratada uma única vez. A análise também remove sugestões pendentes antigas que deixaram de atender aos critérios atuais.
       </div>
     </div>
   </div>
 
+  {% if grouped_mode and bulk_filtered_count %}
   <form method="post" action="{% url 'finance:duplicate-review-bulk' %}" id="duplicate-bulk-form" data-filtered-count="{{ bulk_filtered_count }}">
     {% csrf_token %}
     <input type="hidden" name="status" value="{{ duplicate_filters.status }}">
@@ -131,6 +146,7 @@
     <input type="hidden" name="confidence_min" value="{% if duplicate_filters.confidence_min is not None %}{{ duplicate_filters.confidence_min }}{% endif %}">
     <input type="hidden" name="confidence_max" value="{% if duplicate_filters.confidence_max is not None %}{{ duplicate_filters.confidence_max }}{% endif %}">
     <input type="hidden" name="bank" value="{% if duplicate_filters.bank_id %}{{ duplicate_filters.bank_id }}{% endif %}">
+    <input type="hidden" name="category" value="{% if duplicate_filters.category_id %}{{ duplicate_filters.category_id }}{% endif %}">
     <input type="hidden" name="source_a" value="{{ duplicate_filters.source_a }}">
     <input type="hidden" name="source_b" value="{{ duplicate_filters.source_b }}">
     <input type="hidden" name="sort" value="{{ duplicate_filters.sort }}">
@@ -138,15 +154,14 @@
     <input type="hidden" name="q" value="{{ duplicate_filters.q }}">
     <input type="hidden" name="return_page" value="{{ page_obj.number }}">
 
-    {% if status_filter != 'reviewed' and bulk_filtered_count %}
     <div class="card border-warning shadow-sm mb-4 sticky-top" style="top: .5rem; z-index: 1010;">
       <div class="card-body">
         <div class="row g-3 align-items-end">
           <div class="col-12 col-xl-3">
             <div class="d-flex flex-wrap gap-2 align-items-center">
-              <button class="btn btn-sm btn-outline-primary" type="button" id="select-page-reviews">Selecionar desta página</button>
+              <button class="btn btn-sm btn-outline-primary" type="button" id="select-page-reviews">Selecionar grupos desta página</button>
               <button class="btn btn-sm btn-outline-secondary" type="button" id="clear-review-selection">Limpar seleção</button>
-              <span class="small"><strong id="selected-review-count">0</strong> selecionado(s)</span>
+              <span class="small"><strong id="selected-review-count">0</strong> grupo(s)</span>
             </div>
           </div>
           <div class="col-12 col-md-6 col-xl-3">
@@ -162,73 +177,141 @@
             <input class="form-control" id="bulk-password" name="current_password" type="password" autocomplete="current-password" required placeholder="Confirme com sua senha">
           </div>
           <div class="col-12 col-xl-3">
-            <button class="btn btn-warning w-100" type="submit" id="apply-bulk-review">Aplicar aos selecionados</button>
+            <button class="btn btn-warning w-100" type="submit" id="apply-bulk-review">Aplicar aos grupos selecionados</button>
           </div>
           <div class="col-12">
             <div class="form-check border rounded p-3 ps-5 bg-light">
               <input class="form-check-input" type="checkbox" value="1" id="apply-all-filtered" name="apply_all_filtered">
               <label class="form-check-label" for="apply-all-filtered">
-                <strong>Aplicar a todos os {{ bulk_filtered_count }} par(es) pendentes do filtro atual</strong>, mesmo que não estejam nesta página.
-                <span class="d-block small text-secondary">Pares que compartilham a mesma movimentação com outro par da seleção são preservados como pendentes para evitar decisões contraditórias.</span>
+                <strong>Aplicar a todos os {{ bulk_filtered_count }} grupo(s) pendentes do filtro atual</strong>, mesmo que não estejam nesta página.
+                <span class="d-block small text-secondary">Ações “primeira/segunda” são aplicadas apenas em grupos com exatamente 2 movimentos. Preferência por Pluggy/OFX exige uma única movimentação daquela origem no grupo.</span>
               </label>
             </div>
           </div>
         </div>
       </div>
     </div>
-    {% endif %}
+  </form>
+  {% endif %}
 
+  {% if grouped_mode %}
+    {% for group in groups %}
+    <div class="card border-0 shadow-sm mb-4">
+      <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between gap-2 align-items-lg-center">
+        <div class="d-flex flex-wrap gap-2 align-items-center">
+          <div class="form-check mb-0">
+            <input class="form-check-input duplicate-review-checkbox" form="duplicate-bulk-form" type="checkbox" name="group_seed_ids" value="{{ group.seed_review_id }}" id="group-{{ group.seed_review_id }}" {% if not group.fully_matches_filter %}disabled{% endif %}>
+            <label class="form-check-label small" for="group-{{ group.seed_review_id }}">{% if group.fully_matches_filter %}Selecionar grupo{% else %}Revisão individual{% endif %}</label>
+          </div>
+          <span class="badge text-bg-warning">Grupo #{{ group.seed_review_id }}</span>
+          <span class="badge {% if group.max_confidence >= 90 %}text-bg-danger{% else %}text-bg-warning{% endif %}">{{ group.min_confidence }}{% if group.max_confidence != group.min_confidence %}–{{ group.max_confidence }}{% endif %}%</span>
+          <span class="small text-secondary">{{ group.transaction_count }} movimentação(ões) · {{ group.pair_count }} relação(ões)</span>
+          {% if not group.fully_matches_filter %}<span class="badge text-bg-secondary">contém relações fora do filtro · lote bloqueado</span>{% endif %}
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          {% for transaction in group.transactions %}
+          <div class="col-12 col-xl-6">
+            <div class="border rounded p-3 h-100 {% if transaction.is_financially_ignored %}bg-light{% endif %}">
+              <div class="d-flex justify-content-between gap-2 align-items-start">
+                <div class="small text-secondary">Movimentação #{{ transaction.pk }}</div>
+                {% if transaction.is_financially_ignored %}<span class="badge text-bg-secondary">Fora dos totais</span>{% endif %}
+              </div>
+              <div class="fw-semibold">{{ transaction.account.bank.name }} · {{ transaction.account.nickname }}</div>
+              <div>{{ transaction.posted_at|date:"d/m/Y H:i" }} · {{ transaction.get_source_type_display }}</div>
+              {% if transaction.category %}<div class="small text-secondary">Categoria: {{ transaction.category.name }}</div>{% endif %}
+              <div class="mt-2">{{ transaction.raw_description }}</div>
+              {% if transaction.counterparty %}<div class="small">Pessoa: {{ transaction.counterparty.display_name }}</div>{% endif %}
+              <div class="mt-2 fw-semibold" data-sensitive-value>{{ transaction.signed_amount|brl_signed }}</div>
+              {% if transaction.fitid %}<div class="small text-secondary text-break">FITID: {{ transaction.fitid }}</div>{% endif %}
+              {% if transaction.payment_details.payment_method %}<div class="small text-secondary">Meio: {{ transaction.payment_details.payment_method }}</div>{% endif %}
+              {% with payer=transaction.payment_payer receiver=transaction.payment_receiver %}
+                {% if payer.name or payer.account_number %}
+                  <div class="small text-secondary">Origem: {% if payer.name %}{{ payer.name }}{% endif %}{% if payer.bank_name %} · {{ payer.bank_name }}{% elif payer.routing_number %} · COMPE {{ payer.routing_number }}{% endif %}{% if payer.account_number %} · conta {{ payer.account_number }}{% endif %}</div>
+                {% endif %}
+                {% if receiver.name or receiver.account_number %}
+                  <div class="small text-secondary">Destino: {% if receiver.name %}{{ receiver.name }}{% endif %}{% if receiver.bank_name %} · {{ receiver.bank_name }}{% elif receiver.routing_number %} · COMPE {{ receiver.routing_number }}{% endif %}{% if receiver.account_number %} · conta {{ receiver.account_number }}{% endif %}</div>
+                {% endif %}
+              {% endwith %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+
+        {% if group.match_reasons %}
+        <div class="small text-secondary mt-3"><strong>Evidências do grupo:</strong> {{ group.match_reasons|join:", " }}</div>
+        {% endif %}
+
+        <form method="post" action="{% url 'finance:duplicate-review-group' group.seed_review_id %}" class="border rounded bg-light p-3 mt-3">
+          {% csrf_token %}
+          <div class="row g-3 align-items-end">
+            <div class="col-12 col-lg-4">
+              <label class="form-label" for="group-action-{{ group.seed_review_id }}">Decisão do grupo</label>
+              <select class="form-select" id="group-action-{{ group.seed_review_id }}" name="action" required>
+                {% for value, label in group_action_choices %}<option value="{{ value }}">{{ label }}</option>{% endfor %}
+              </select>
+            </div>
+            <div class="col-12 col-lg-4">
+              <label class="form-label" for="group-canonical-{{ group.seed_review_id }}">Movimentação canônica</label>
+              <select class="form-select" id="group-canonical-{{ group.seed_review_id }}" name="canonical_transaction_id">
+                <option value="">Escolha quando for manter/mesclar somente uma</option>
+                {% for transaction in group.transactions %}
+                <option value="{{ transaction.pk }}">#{{ transaction.pk }} · {{ transaction.get_source_type_display }} · {{ transaction.posted_at|date:"d/m/Y H:i" }} · {{ transaction.signed_amount|brl_signed }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-12 col-lg-2">
+              <label class="form-label" for="group-password-{{ group.seed_review_id }}">Senha atual</label>
+              <input class="form-control" id="group-password-{{ group.seed_review_id }}" name="current_password" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="col-12 col-lg-2 d-grid">
+              <button class="btn btn-outline-primary" type="submit">Resolver grupo</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+    {% empty %}
+    <div class="card border-0 shadow-sm"><div class="card-body text-center py-5 text-secondary">Nenhum grupo de duplicidade encontrado neste filtro.</div></div>
+    {% endfor %}
+  {% else %}
     {% for review in reviews %}
     <div class="card border-0 shadow-sm mb-3">
       <div class="card-header bg-white d-flex flex-column flex-lg-row justify-content-between gap-2 align-items-lg-center">
         <div class="d-flex flex-wrap gap-2 align-items-center">
-          {% if review.status == 'PENDING' %}
-          <div class="form-check mb-0">
-            <input class="form-check-input duplicate-review-checkbox" type="checkbox" name="review_ids" value="{{ review.pk }}" id="review-{{ review.pk }}">
-            <label class="form-check-label small" for="review-{{ review.pk }}">Selecionar</label>
-          </div>
-          {% endif %}
-          <span class="badge {% if review.classification == 'EXACT' %}text-bg-danger{% else %}text-bg-warning{% endif %}">
-            {{ review.get_classification_display }} · {{ review.confidence }}%
-          </span>
+          <span class="badge {% if review.classification == 'EXACT' %}text-bg-danger{% else %}text-bg-warning{% endif %}">{{ review.get_classification_display }} · {{ review.confidence }}%</span>
           <span class="small text-secondary">{{ review.get_status_display }}</span>
         </div>
-        <a class="btn btn-sm btn-outline-primary" href="{% url 'finance:duplicate-review-detail' review.pk %}">Comparar e decidir</a>
+        <a class="btn btn-sm btn-outline-primary" href="{% url 'finance:duplicate-review-detail' review.pk %}">Ver decisão</a>
       </div>
       <div class="card-body">
         <div class="row g-3">
-          <div class="col-12 col-xl-6">
-            <div class="border rounded p-3 h-100">
-              <div class="small text-secondary">Movimentação A · #{{ review.first_transaction.pk }}</div>
-              <div class="fw-semibold">{{ review.first_transaction.account.bank.name }} · {{ review.first_transaction.account.nickname }}</div>
-              <div>{{ review.first_transaction.posted_at|date:"d/m/Y H:i" }} · {{ review.first_transaction.get_source_type_display }}</div>
-              <div class="mt-2">{{ review.first_transaction.raw_description }}</div>
-              {% if review.first_transaction.counterparty %}<div class="small">Pessoa: {{ review.first_transaction.counterparty.display_name }}</div>{% endif %}
-              <div class="mt-2 fw-semibold" data-sensitive-value>{{ review.first_transaction.signed_amount|brl_signed }}</div>
-              {% if review.first_transaction.fitid %}<div class="small text-secondary text-break">FITID: {{ review.first_transaction.fitid }}</div>{% endif %}
-            </div>
-          </div>
-          <div class="col-12 col-xl-6">
-            <div class="border rounded p-3 h-100">
-              <div class="small text-secondary">Movimentação B · #{{ review.second_transaction.pk }}</div>
-              <div class="fw-semibold">{{ review.second_transaction.account.bank.name }} · {{ review.second_transaction.account.nickname }}</div>
-              <div>{{ review.second_transaction.posted_at|date:"d/m/Y H:i" }} · {{ review.second_transaction.get_source_type_display }}</div>
-              <div class="mt-2">{{ review.second_transaction.raw_description }}</div>
-              {% if review.second_transaction.counterparty %}<div class="small">Pessoa: {{ review.second_transaction.counterparty.display_name }}</div>{% endif %}
-              <div class="mt-2 fw-semibold" data-sensitive-value>{{ review.second_transaction.signed_amount|brl_signed }}</div>
-              {% if review.second_transaction.fitid %}<div class="small text-secondary text-break">FITID: {{ review.second_transaction.fitid }}</div>{% endif %}
-            </div>
-          </div>
+          <div class="col-12 col-xl-6"><div class="border rounded p-3 h-100">
+            <div class="small text-secondary">Movimentação A · #{{ review.first_transaction.pk }}</div>
+            <div class="fw-semibold">{{ review.first_transaction.account.bank.name }} · {{ review.first_transaction.account.nickname }}</div>
+            <div>{{ review.first_transaction.posted_at|date:"d/m/Y H:i" }} · {{ review.first_transaction.get_source_type_display }}</div>
+            {% if review.first_transaction.category %}<div class="small text-secondary">Categoria: {{ review.first_transaction.category.name }}</div>{% endif %}
+            <div class="mt-2">{{ review.first_transaction.raw_description }}</div>
+            {% if review.first_transaction.counterparty %}<div class="small">Pessoa: {{ review.first_transaction.counterparty.display_name }}</div>{% endif %}
+            <div class="mt-2 fw-semibold" data-sensitive-value>{{ review.first_transaction.signed_amount|brl_signed }}</div>
+          </div></div>
+          <div class="col-12 col-xl-6"><div class="border rounded p-3 h-100">
+            <div class="small text-secondary">Movimentação B · #{{ review.second_transaction.pk }}</div>
+            <div class="fw-semibold">{{ review.second_transaction.account.bank.name }} · {{ review.second_transaction.account.nickname }}</div>
+            <div>{{ review.second_transaction.posted_at|date:"d/m/Y H:i" }} · {{ review.second_transaction.get_source_type_display }}</div>
+            {% if review.second_transaction.category %}<div class="small text-secondary">Categoria: {{ review.second_transaction.category.name }}</div>{% endif %}
+            <div class="mt-2">{{ review.second_transaction.raw_description }}</div>
+            {% if review.second_transaction.counterparty %}<div class="small">Pessoa: {{ review.second_transaction.counterparty.display_name }}</div>{% endif %}
+            <div class="mt-2 fw-semibold" data-sensitive-value>{{ review.second_transaction.signed_amount|brl_signed }}</div>
+          </div></div>
         </div>
-        {% if review.match_reasons %}
-        <div class="small text-secondary mt-3"><strong>Evidências:</strong> {{ review.match_reasons|join:", " }}</div>
-        {% endif %}
       </div>
     </div>
     {% empty %}
-    <div class="card border-0 shadow-sm"><div class="card-body text-center py-5 text-secondary">Nenhuma duplicidade encontrada neste filtro.</div></div>
+    <div class="card border-0 shadow-sm"><div class="card-body text-center py-5 text-secondary">Nenhuma revisão encontrada neste filtro.</div></div>
     {% endfor %}
-  </form>
+  {% endif %}
 
   {% if is_paginated %}
   <nav class="mt-4" aria-label="Paginação"><ul class="pagination justify-content-end">
@@ -238,5 +321,5 @@
   </ul></nav>
   {% endif %}
 </div>
-<script src="{% static 'js/duplicate_review.js' %}?v=10.9.7"></script>
+<script src="{% static 'js/duplicate_review.js' %}?v=10.9.10"></script>
 {% endblock %}

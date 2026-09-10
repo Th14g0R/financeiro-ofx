@@ -2,7 +2,7 @@
   const form = document.getElementById('duplicate-bulk-form');
   if (!form) return;
 
-  const checkboxes = Array.from(form.querySelectorAll('.duplicate-review-checkbox'));
+  const checkboxes = Array.from(document.querySelectorAll('.duplicate-review-checkbox[form="duplicate-bulk-form"]:not(:disabled)'));
   const selectedCount = document.getElementById('selected-review-count');
   const selectPageButton = document.getElementById('select-page-reviews');
   const clearButton = document.getElementById('clear-review-selection');
@@ -20,9 +20,9 @@
     if (selectedCount) selectedCount.textContent = String(count);
     if (submitButton) {
       if (applyAllFiltered?.checked) {
-        submitButton.textContent = `Aplicar aos ${filteredCount} filtrados`;
+        submitButton.textContent = `Aplicar aos ${filteredCount} grupos filtrados`;
       } else {
-        submitButton.textContent = count === 1 ? 'Aplicar ao selecionado' : `Aplicar aos ${count} selecionados`;
+        submitButton.textContent = count === 1 ? 'Aplicar ao grupo selecionado' : `Aplicar aos ${count} grupos selecionados`;
       }
     }
   }
@@ -47,17 +47,17 @@
     const count = countSelected();
     if (!allFiltered && count === 0) {
       event.preventDefault();
-      window.alert('Selecione ao menos uma duplicidade ou marque a opção para aplicar a todos os resultados filtrados.');
+      window.alert('Selecione ao menos um grupo ou marque a opção para aplicar a todos os grupos filtrados.');
       return;
     }
 
     const actionText = actionSelect?.selectedOptions?.[0]?.textContent?.trim() || 'a decisão selecionada';
     const targetText = allFiltered
-      ? `${filteredCount} par(es) pendentes do filtro atual`
-      : `${count} par(es) selecionado(s)`;
+      ? `${filteredCount} grupo(s) do filtro atual`
+      : `${count} grupo(s) selecionado(s)`;
     const confirmed = window.confirm(
       `Confirmar “${actionText}” para ${targetText}?\n\n` +
-      'A operação preserva o histórico de auditoria. Pares sobrepostos serão mantidos pendentes por segurança.'
+      'Cada movimentação será processada uma única vez dentro do grupo. Grupos incompatíveis com a ação escolhida serão preservados para revisão individual.'
     );
     if (!confirmed) {
       event.preventDefault();

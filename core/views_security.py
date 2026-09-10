@@ -2,22 +2,109 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.contrib import messages
+from django.contrib.auth import login
 from django.contrib.auth import views as auth_views
 from django.contrib.auth.decorators import login_required
+from django.db import transaction
 from django.forms.utils import ErrorDict
 from django.shortcuts import redirect
 from django.shortcuts import render
 from django.urls import reverse_lazy
+from django.views.decorators.csrf import csrf_protect
 
+from .access import active_system_admin_exists
 from .forms import AccountProfileForm
+from .forms import InitialAdminSetupForm
 from .forms import LoginForm
 from .forms import RecoveryPasswordResetForm
+from .models import AuditEvent
 from .models import SecurityEvent
+from .models import UserAccessProfile
 from .security import clear_username_failures
+from .security import client_is_loopback
+from .security import _protected_hash
+from .security import client_ip
 from .security import login_is_blocked
 from .security import record_security_event
 from .security import register_login_failure
 from .security import sensitive_operation_allowed
+
+
+@csrf_protect
+def initial_admin_setup(request):
+    """Cria o primeiro administrador exclusivamente a partir do próprio PC."""
+    if not client_is_loopback(request):
+        return render(
+            request,
+            "registration/initial_admin_forbidden.html",
+            status=403,
+        )
+
+    if active_system_admin_exists():
+        if request.user.is_authenticated:
+            return redirect("home")
+        return redirect("login")
+
+    if request.method == "POST":
+        form = InitialAdminSetupForm(request.POST)
+        if form.is_valid():
+            with transaction.atomic():
+                # Revalida imediatamente antes de gravar para evitar a criação
+                # acidental de um segundo administrador em abas concorrentes.
+                if active_system_admin_exists():
+                    messages.warning(
+                        request,
+                        "Um administrador já foi criado. Faça login para continuar.",
+                    )
+                    return redirect("login")
+
+                user = form.save()
+
+                request_id = (
+                    getattr(request, "audit_request_id", "")
+                    or "initial-admin"
+                )
+                ip_value = client_ip(request)
+                AuditEvent.objects.create(
+                    actor=user,
+                    action="initial_admin_setup",
+                    method="POST",
+                    path=request.path[:500],
+                    status_code=302,
+                    success=True,
+                    request_id=str(request_id)[:36],
+                    ip_hash=(
+                        _protected_hash("audit-ip", ip_value)
+                        if ip_value
+                        else ""
+                    ),
+                    detail={
+                        "operation": {
+                            "first_administrator_created": True,
+                            "target_user_id": user.pk,
+                            "target_role": UserAccessProfile.Role.ADMIN,
+                        }
+                    },
+                )
+
+            login(request, user)
+
+            messages.success(
+                request,
+                (
+                    "Administrador inicial criado com sucesso. "
+                    "O Financeiro OFX está pronto para uso."
+                ),
+            )
+            return redirect("home")
+    else:
+        form = InitialAdminSetupForm()
+
+    return render(
+        request,
+        "registration/initial_admin_setup.html",
+        {"form": form},
+    )
 
 
 class SecureLoginView(
@@ -28,6 +115,11 @@ class SecureLoginView(
     )
     authentication_form = LoginForm
     redirect_authenticated_user = True
+
+    def dispatch(self, request, *args, **kwargs):
+        if not active_system_admin_exists():
+            return redirect("initial_admin_setup")
+        return super().dispatch(request, *args, **kwargs)
 
     def post(
         self,

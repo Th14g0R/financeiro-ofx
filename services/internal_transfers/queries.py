@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from django.db.models import BooleanField
 from django.db.models import IntegerField
 from django.db.models import Case
 from django.db.models import Exists
@@ -121,11 +122,27 @@ def annotate_financial_scope(
     )
 
     queryset = queryset.annotate(
-        is_internal_transfer=Exists(
-            confirmed
+        has_confirmed_internal_pair=Exists(confirmed),
+        has_possible_internal_pair=Exists(possible),
+    )
+
+    queryset = queryset.annotate(
+        is_internal_transfer=Case(
+            When(
+                Q(has_confirmed_internal_pair=True)
+                | Q(is_internal_balance_movement=True),
+                then=Value(True),
+            ),
+            default=Value(False),
+            output_field=BooleanField(),
         ),
-        is_possible_internal_transfer=Exists(
-            possible
+        is_possible_internal_transfer=Case(
+            When(
+                has_possible_internal_pair=True,
+                then=Value(True),
+            ),
+            default=Value(False),
+            output_field=BooleanField(),
         ),
     )
 

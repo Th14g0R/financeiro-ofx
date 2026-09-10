@@ -113,3 +113,16 @@ class SecurityAuditSettingsTests(
                 for item in lan_findings
             )
         )
+
+
+class SecurityAuditTemplateTests(SimpleTestCase):
+    def test_templates_do_not_disable_autoescape_explicitly(self):
+        findings = Command()._template_findings()
+
+        self.assertFalse(
+            any(
+                item.code == "TPL001"
+                and item.severity == "HIGH"
+                for item in findings
+            )
+        )

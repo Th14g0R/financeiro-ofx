@@ -35,6 +35,15 @@ class CounterpartyParserTests(TestCase):
             "CARLOS EDUARDO VAZQUEZ ABUJDER",
         )
 
+    def test_extracts_compact_pluggy_transfer_counterparty_after_pipe(self):
+        candidate = extract_counterparty_candidate(
+            "Transferência Recebida|José Davi Silva de Oliveira",
+            transaction_type=Transaction.TransactionType.TRANSFER,
+        )
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.name, "José Davi Silva de Oliveira")
+
     def test_normalization_is_case_and_accent_insensitive(self):
         self.assertEqual(
             normalize_identity_text(

@@ -32,9 +32,9 @@
     </div>
 
     <div class="row g-3 mb-4">
-        <div class="col-12 col-md-4">
+        <div class="col-12 col-md-3">
             <a
-                href="?status=POSSIBLE"
+                href="?status=POSSIBLE{% if bank_filter %}&bank={{ bank_filter }}{% endif %}"
                 class="card border-0 shadow-sm text-decoration-none h-100"
             >
                 <div class="card-body">
@@ -48,9 +48,9 @@
             </a>
         </div>
 
-        <div class="col-12 col-md-4">
+        <div class="col-12 col-md-3">
             <a
-                href="?status=CONFIRMED"
+                href="?status=CONFIRMED{% if bank_filter %}&bank={{ bank_filter }}{% endif %}"
                 class="card border-0 shadow-sm text-decoration-none h-100"
             >
                 <div class="card-body">
@@ -64,9 +64,9 @@
             </a>
         </div>
 
-        <div class="col-12 col-md-4">
+        <div class="col-12 col-md-3">
             <a
-                href="?status=REJECTED"
+                href="?status=REJECTED{% if bank_filter %}&bank={{ bank_filter }}{% endif %}"
                 class="card border-0 shadow-sm text-decoration-none h-100"
             >
                 <div class="card-body">
@@ -79,42 +79,60 @@
                 </div>
             </a>
         </div>
+
+        <div class="col-12 col-md-3">
+            <a
+                href="{% url 'finance:transaction-list' %}?scope=internal_balance{% if bank_filter %}&bank={{ bank_filter }}{% endif %}"
+                class="card border-0 shadow-sm text-decoration-none h-100"
+            >
+                <div class="card-body">
+                    <div class="small text-secondary">
+                        Cofrinho/reserva da mesma conta
+                    </div>
+                    <div class="fs-3 fw-semibold text-dark">
+                        {{ internal_balance_count }}
+                    </div>
+                </div>
+            </a>
+        </div>
     </div>
 
     <div class="card border-0 shadow-sm mb-4">
         <div class="card-body">
             <form method="get" class="row g-3 align-items-end">
-                <div class="col-12 col-md-5">
-                    <label
-                        for="status"
-                        class="form-label"
-                    >
-                        Situação
-                    </label>
-
-                    <select
-                        id="status"
-                        name="status"
-                        class="form-select"
-                    >
+                <div class="col-12 col-md-4">
+                    <label for="status" class="form-label">Situação</label>
+                    <select id="status" name="status" class="form-select">
                         {% for value, label in status_choices %}
-                            <option
-                                value="{{ value }}"
-                                {% if status_filter == value %}selected{% endif %}
-                            >
+                            <option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>
                                 {{ label }}
                             </option>
                         {% endfor %}
                     </select>
                 </div>
 
-                <div class="col-12 col-md-3 d-grid">
+                <div class="col-12 col-md-4">
+                    <label for="bank" class="form-label">Banco</label>
+                    <select id="bank" name="bank" class="form-select">
+                        <option value="">Todos</option>
+                        {% for bank in banks %}
+                            <option value="{{ bank.pk }}" {% if bank_filter == bank.pk %}selected{% endif %}>
+                                {{ bank.name }}
+                            </option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div class="col-12 col-md-2 d-grid">
                     <button
                         type="submit"
                         class="btn btn-outline-secondary"
                     >
                         Filtrar
                     </button>
+                </div>
+                <div class="col-12 col-md-2 d-grid">
+                    <a href="{% url 'finance:internal-transfer-list' %}" class="btn btn-outline-dark">Limpar</a>
                 </div>
             </form>
         </div>

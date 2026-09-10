@@ -13,6 +13,8 @@ from finance.models import Bank
 from finance.models import InternalTransfer
 from finance.models import Transaction
 from services.internal_transfers import analyze_internal_transfers
+from services.internal_transfers import analyze_internal_balance_movements
+from services.internal_transfers import classify_internal_balance_movement
 from services.internal_transfers import confirm_internal_transfer
 from services.internal_transfers import reject_internal_transfer
 
@@ -670,5 +672,68 @@ class InternalTransferViewsTests(
         )
         self.assertContains(
             response,
-            "Transferência interna",
+            "Transferência entre minhas contas",
         )
+
+
+class SameAccountInternalBalanceTests(InternalTransferTestBase):
+    def test_cofrinho_movement_is_internal_even_without_second_account(self):
+        tx = self.make_transaction(
+            account=self.account_a,
+            direction=Transaction.Direction.DEBIT,
+            amount="250.00",
+            source_type=Transaction.SourceType.API,
+            description="Transferência para Cofrinho",
+            fitid="PLUGGY:COFRINHO-1",
+        )
+
+        result = analyze_internal_balance_movements(transaction_ids=[tx.pk])
+
+        tx.refresh_from_db()
+        self.assertEqual(result["detected"], 1)
+        self.assertTrue(tx.is_internal_balance_movement)
+        self.assertIn("cofrinho", tx.internal_balance_reason.lower())
+
+    def test_cofrinho_yield_remains_real_income(self):
+        tx = self.make_transaction(
+            account=self.account_a,
+            direction=Transaction.Direction.CREDIT,
+            amount="1.23",
+            source_type=Transaction.SourceType.API,
+            transaction_type=Transaction.TransactionType.INTEREST,
+            description="Rendimento do Cofrinho 100% CDI",
+            fitid="PLUGGY:RENDIMENTO-1",
+        )
+
+        detected, reason = classify_internal_balance_movement(tx)
+
+        self.assertFalse(detected)
+        self.assertEqual(reason, "")
+
+    def test_dashboard_excludes_cofrinho_transfer_but_keeps_yield(self):
+        self.client.force_login(self.user)
+        transfer = self.make_transaction(
+            account=self.account_a,
+            direction=Transaction.Direction.DEBIT,
+            amount="300.00",
+            source_type=Transaction.SourceType.API,
+            description="Transferência para Cofrinho",
+            fitid="PLUGGY:COFRINHO-2",
+        )
+        yield_tx = self.make_transaction(
+            account=self.account_a,
+            direction=Transaction.Direction.CREDIT,
+            amount="2.50",
+            source_type=Transaction.SourceType.API,
+            transaction_type=Transaction.TransactionType.INTEREST,
+            description="Rendimento do Cofrinho CDI",
+            fitid="PLUGGY:RENDIMENTO-2",
+        )
+        analyze_internal_balance_movements(transaction_ids=[transfer.pk, yield_tx.pk])
+
+        response = self.client.get(reverse("home"), {"month": self.base_time.strftime("%Y-%m")})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["period_debit"], Decimal("0.00"))
+        self.assertEqual(response.context["period_credit"], Decimal("2.50"))
+        self.assertEqual(response.context["internal_balance_count"], 1)

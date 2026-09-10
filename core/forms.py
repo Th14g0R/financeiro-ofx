@@ -170,6 +170,121 @@ class AccountProfileForm(forms.Form):
 
 
 
+class InitialAdminSetupForm(UserCreationForm):
+    first_name = forms.CharField(
+        label="Nome",
+        max_length=150,
+        required=True,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "autocomplete": "given-name",
+                "autofocus": True,
+            }
+        ),
+    )
+    last_name = forms.CharField(
+        label="Sobrenome",
+        max_length=150,
+        required=False,
+        widget=forms.TextInput(
+            attrs={
+                "class": "form-control",
+                "autocomplete": "family-name",
+            }
+        ),
+    )
+    email = forms.EmailField(
+        label="E-mail de recuperação",
+        max_length=254,
+        required=True,
+        widget=forms.EmailInput(
+            attrs={
+                "class": "form-control",
+                "autocomplete": "email",
+            }
+        ),
+    )
+
+    class Meta(UserCreationForm.Meta):
+        model = get_user_model()
+        fields = (
+            "username",
+            "first_name",
+            "last_name",
+            "email",
+            "password1",
+            "password2",
+        )
+        widgets = {
+            "username": forms.TextInput(
+                attrs={
+                    "class": "form-control",
+                    "autocomplete": "username",
+                    "autocapitalize": "none",
+                }
+            ),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["password1"].widget.attrs.update(
+            {
+                "class": "form-control",
+                "autocomplete": "new-password",
+            }
+        )
+        self.fields["password2"].widget.attrs.update(
+            {
+                "class": "form-control",
+                "autocomplete": "new-password",
+            }
+        )
+
+    def clean_username(self):
+        username = super().clean_username().strip()
+        user_model = get_user_model()
+        if user_model._default_manager.filter(
+            username__iexact=username
+        ).exists():
+            raise forms.ValidationError(
+                "Já existe um usuário com este nome, inclusive com outra capitalização."
+            )
+        return username
+
+    def clean_email(self):
+        email = self.cleaned_data["email"].strip()
+        user_model = get_user_model()
+        if user_model._default_manager.filter(
+            email__iexact=email,
+            is_active=True,
+        ).exists():
+            raise forms.ValidationError(
+                "Este e-mail já está associado a outra conta ativa."
+            )
+        return email
+
+    def save(self, commit=True):
+        user = super().save(commit=False)
+        user.first_name = self.cleaned_data["first_name"].strip()
+        user.last_name = self.cleaned_data["last_name"].strip()
+        user.email = self.cleaned_data["email"].strip()
+        user.is_active = True
+        user.is_staff = True
+        user.is_superuser = True
+
+        if commit:
+            user.save()
+            profile, _created = UserAccessProfile.objects.get_or_create(
+                user=user
+            )
+            if profile.role != UserAccessProfile.Role.ADMIN:
+                profile.role = UserAccessProfile.Role.ADMIN
+                profile.save(update_fields=["role", "updated_at"])
+
+        return user
+
+
 class ManagedUserCreateForm(UserCreationForm):
     administrator_password = forms.CharField(
         label="Sua senha de administrador",

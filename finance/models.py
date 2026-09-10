@@ -422,7 +422,7 @@ class Transaction(models.Model):
         CARD_PURCHASE = "CARD_PURCHASE", "Compra no cartão"
         PAYMENT = "PAYMENT", "Pagamento"
         FEE = "FEE", "Tarifa"
-        INTEREST = "INTEREST", "Juros"
+        INTEREST = "INTEREST", "Rendimento / juros"
         CASH_WITHDRAWAL = "CASH_WITHDRAWAL", "Saque"
         CASH_DEPOSIT = "CASH_DEPOSIT", "Depósito"
         REFUND = "REFUND", "Estorno"
@@ -434,6 +434,10 @@ class Transaction(models.Model):
         PDF = "PDF", "PDF"
         API = "API", "API"
         IMPORT = "IMPORT", "Importação"
+
+    class CategoryAssignmentSource(models.TextChoices):
+        PLUGGY = "PLUGGY", "Pluggy"
+        MANUAL = "MANUAL", "Manual"
 
     account = models.ForeignKey(
         Account,
@@ -511,6 +515,31 @@ class Transaction(models.Model):
         null=True,
         blank=True,
     )
+    source_category_name = models.CharField(
+        "Categoria informada pela origem",
+        max_length=120,
+        blank=True,
+        help_text=(
+            "Categoria recebida da fonte original, como a classificação da Pluggy. "
+            "É preservada mesmo quando a categoria local é ajustada manualmente."
+        ),
+    )
+    source_category_id = models.CharField(
+        "ID da categoria na origem",
+        max_length=64,
+        blank=True,
+    )
+    category_assignment_source = models.CharField(
+        "Origem da categoria aplicada",
+        max_length=16,
+        choices=CategoryAssignmentSource.choices,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Indica se a categoria local foi sugerida automaticamente pela Pluggy "
+            "ou escolhida manualmente no Financeiro OFX."
+        ),
+    )
     counterparty = models.ForeignKey(
         Counterparty,
         verbose_name="Contraparte",
@@ -541,6 +570,29 @@ class Transaction(models.Model):
     )
     notes = models.TextField(
         "Observações",
+        blank=True,
+    )
+    payment_details = models.JSONField(
+        "Detalhes estruturados do pagamento",
+        default=dict,
+        blank=True,
+        help_text=(
+            "Dados normalizados de pagador/recebedor, banco, agência, conta, "
+            "meio de pagamento e referências, quando fornecidos pela origem."
+        ),
+    )
+    is_internal_balance_movement = models.BooleanField(
+        "Movimentação interna no saldo da própria conta",
+        default=False,
+        db_index=True,
+        help_text=(
+            "Marca movimentações entre o saldo disponível e reservas/cofrinhos da mesma conta. "
+            "Esses valores permanecem no extrato, mas não compõem entrada/saída externa."
+        ),
+    )
+    internal_balance_reason = models.CharField(
+        "Motivo da movimentação interna no saldo",
+        max_length=255,
         blank=True,
     )
     is_financially_ignored = models.BooleanField(
@@ -634,6 +686,9 @@ class Transaction(models.Model):
         self.reference = self.reference.strip()
         self.fingerprint = self.fingerprint.strip().lower()
         self.notes = self.notes.strip()
+        self.internal_balance_reason = self.internal_balance_reason.strip()
+        self.source_category_name = self.source_category_name.strip()
+        self.source_category_id = self.source_category_id.strip()
 
         if self.category:
             allowed_types = {
@@ -693,6 +748,28 @@ class Transaction(models.Model):
         )
 
     @property
+    def payment_payer(self):
+        value = (self.payment_details or {}).get("payer", {})
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def payment_receiver(self):
+        value = (self.payment_details or {}).get("receiver", {})
+        return value if isinstance(value, dict) else {}
+
+    @property
+    def payment_method(self):
+        return str((self.payment_details or {}).get("payment_method") or "")
+
+    @property
+    def payment_reference_number(self):
+        return str((self.payment_details or {}).get("reference_number") or "")
+
+    @property
+    def payment_pix_key(self):
+        return str((self.payment_details or {}).get("pix_key") or "")
+
+    @property
     def signed_amount(self):
         if self.direction == self.Direction.CREDIT:
             return self.amount
@@ -724,6 +801,7 @@ class TransactionDuplicateReview(models.Model):
         KEEP_SECOND = "KEEP_SECOND", "Manter segunda"
         MERGED_FIRST = "MERGED_FIRST", "Mesclada na primeira"
         MERGED_SECOND = "MERGED_SECOND", "Mesclada na segunda"
+        GROUP_RESOLVED = "GROUP_RESOLVED", "Resolvida em grupo"
 
     first_transaction = models.ForeignKey(
         Transaction,

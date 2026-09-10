@@ -610,6 +610,40 @@ def home(request):
         - internal_sent
     )
 
+    internal_balance_transactions = period_transactions.filter(
+        is_internal_balance_movement=True
+    )
+    internal_balance_received = (
+        internal_balance_transactions.filter(
+            direction=Transaction.Direction.CREDIT
+        ).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0.00")
+    )
+    internal_balance_sent = (
+        internal_balance_transactions.filter(
+            direction=Transaction.Direction.DEBIT
+        ).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0.00")
+    )
+    internal_balance_count = internal_balance_transactions.count()
+
+    between_accounts_transactions = period_transactions.filter(
+        is_internal_transfer=True,
+        is_internal_balance_movement=False,
+    )
+    between_accounts_received = (
+        between_accounts_transactions.filter(
+            direction=Transaction.Direction.CREDIT
+        ).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0.00")
+    )
+    between_accounts_sent = (
+        between_accounts_transactions.filter(
+            direction=Transaction.Direction.DEBIT
+        ).aggregate(total=Sum("amount"))["total"]
+        or Decimal("0.00")
+    )
+
     transfer_period_filter = Q(
         debit_transaction__posted_at__date__gte=start,
         debit_transaction__posted_at__date__lte=end,
@@ -869,6 +903,11 @@ def home(request):
         "internal_net": (
             internal_net
         ),
+        "internal_balance_received": internal_balance_received,
+        "internal_balance_sent": internal_balance_sent,
+        "internal_balance_count": internal_balance_count,
+        "between_accounts_received": between_accounts_received,
+        "between_accounts_sent": between_accounts_sent,
         "internal_volume": (
             internal_volume
         ),

@@ -246,6 +246,32 @@ def _looks_like_transfer_description(
     )
 
 
+def _candidate_from_compact_transfer_separator(value: str) -> str:
+    """Extract names from compact bank descriptions such as
+    ``Transferência Recebida|José da Silva`` or ``Pix enviado: Maria``.
+
+    Several API connectors use ``|``/``:`` instead of the spaced hyphen used
+    by OFX/PDF descriptions. Keeping this extraction provider-agnostic allows
+    the normal alias/similarity engine to reuse the same Person records.
+    """
+    match = re.match(
+        r"^\s*(?:PIX\s+)?(?:TRANSFER[EÊ]NCIA\s+)?(?:RECEBID[AO]|ENVIAD[AO]|RECEBIMENTO|ENVIO)\s*[|:]\s*(?P<name>.+?)\s*$",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return " ".join(match.group("name").split()).strip()
+
+    match = re.match(
+        r"^\s*TRANSFER[EÊ]NCIA\s+(?:RECEBID[AO]|ENVIAD[AO])\s*[|:]\s*(?P<name>.+?)\s*$",
+        value,
+        flags=re.IGNORECASE,
+    )
+    if match:
+        return " ".join(match.group("name").split()).strip()
+    return ""
+
+
 def _candidate_segment_from_description(
     value: str,
 ) -> str:
@@ -374,11 +400,13 @@ def extract_counterparty_candidate(
     if _looks_like_transfer_description(
         value
     ):
-        segment = (
-            _candidate_segment_from_description(
-                value
+        segment = _candidate_from_compact_transfer_separator(value)
+        if not segment:
+            segment = (
+                _candidate_segment_from_description(
+                    value
+                )
             )
-        )
     elif transfer_context:
         segment = (
             _candidate_from_trailing_transfer_label(

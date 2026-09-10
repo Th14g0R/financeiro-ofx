@@ -13,11 +13,12 @@ from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
-from finance.models import Account, Bank, InternalTransfer, Transaction, TransactionDuplicateReview
+from finance.models import Account, Bank, Category, InternalTransfer, Transaction, TransactionDuplicateReview
 from services.counterparties.resolver import resolve_transaction_counterparty
 from services.counterparties.resolver import resolve_transaction_counterparty_from_hint
 from services.importing.staging import build_fingerprint
 from services.internal_transfers.matcher import analyze_internal_transfers
+from services.internal_transfers.same_account import apply_internal_balance_classification
 from services.duplicates import analyze_duplicates
 
 from .models import PluggyAccount, PluggyConfiguration, PluggyItem, PluggyTransactionLink
@@ -855,8 +856,16 @@ def upsert_accounts(item: PluggyItem) -> tuple[list[PluggyAccount], int]:
     return list(result.accounts), result.local_accounts_created
 
 
-def _transaction_type(description: str, category: str = "") -> str:
-    text = f"{description} {category}".upper()
+def _transaction_type(
+    description: str,
+    category: str = "",
+    operation_type: str = "",
+    operation_type_additional_info: str = "",
+) -> str:
+    text = (
+        f"{description} {category} {operation_type} "
+        f"{operation_type_additional_info}"
+    ).upper()
     if "PIX" in text:
         return Transaction.TransactionType.PIX
     if "TED" in text:
@@ -865,7 +874,7 @@ def _transaction_type(description: str, category: str = "") -> str:
         return Transaction.TransactionType.DOC
     if "TARIF" in text or "FEE" in text:
         return Transaction.TransactionType.FEE
-    if "JURO" in text or "INTEREST" in text:
+    if any(marker in text for marker in ("JURO", "INTEREST", "RENDIMENTO", "RENTABILIDADE", " CDI ")):
         return Transaction.TransactionType.INTEREST
     if "SAQUE" in text or "WITHDRAW" in text:
         return Transaction.TransactionType.CASH_WITHDRAWAL
@@ -924,6 +933,100 @@ def _expected_values(payload: dict[str, Any]):
     return posted_at, abs(amount_signed), direction, description
 
 
+def _participant_payment_details(participant: Any) -> dict[str, str]:
+    if not isinstance(participant, dict):
+        return {}
+
+    document = participant.get("documentNumber")
+    if isinstance(document, dict):
+        document_type = str(document.get("type") or "").strip()
+        document_value = str(document.get("value") or "").strip()
+    else:
+        document_type = ""
+        document_value = str(document or "").strip()
+
+    routing_number = str(participant.get("routingNumber") or "").strip()[:16]
+    bank_name = ""
+    routing_digits = re.sub(r"\D", "", routing_number)
+    if routing_digits:
+        code = routing_digits[-3:].zfill(3)
+        bank_name = (
+            Bank.objects.filter(code=code).values_list("name", flat=True).first()
+            or ""
+        )
+
+    details = {
+        "name": str(participant.get("name") or "").strip()[:255],
+        "branch_number": str(participant.get("branchNumber") or "").strip()[:40],
+        "account_number": str(participant.get("accountNumber") or "").strip()[:80],
+        "bank_name": str(bank_name)[:120],
+        "routing_number": routing_number,
+        "routing_number_ispb": str(participant.get("routingNumberISPB") or "").strip()[:32],
+        "document_type": document_type[:16],
+        "document_number": document_value[:32],
+    }
+    return {key: value for key, value in details.items() if value}
+
+
+def _find_pix_key(payload: Any) -> str:
+    """Best-effort extraction for provider-specific PIX key fields.
+
+    Pluggy's standard PaymentData schema does not guarantee a PIX key. Some
+    institutions include one in provider-specific nested metadata. We retain
+    it only when an explicit key-like field is present; we never infer it from
+    CPF/account numbers.
+    """
+    accepted = {
+        "pixkey", "pix_key", "receiverpixkey", "receiver_pix_key",
+        "payerpixkey", "payer_pix_key", "dictkey", "dict_key",
+    }
+
+    def walk(value: Any, depth: int = 0) -> str:
+        if depth > 4:
+            return ""
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                normalized = str(key).replace("-", "_").lower()
+                if normalized in accepted and nested not in (None, "", {}, []):
+                    return str(nested).strip()[:255]
+            for nested in value.values():
+                found = walk(nested, depth + 1)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for nested in value[:20]:
+                found = walk(nested, depth + 1)
+                if found:
+                    return found
+        return ""
+
+    return walk(payload)
+
+
+def _normalized_payment_details(payload: dict[str, Any]) -> dict[str, Any]:
+    payment_data = payload.get("paymentData")
+    if not isinstance(payment_data, dict):
+        return {}
+
+    details: dict[str, Any] = {
+        "payer": _participant_payment_details(payment_data.get("payer")),
+        "receiver": _participant_payment_details(payment_data.get("receiver")),
+        "payment_method": str(payment_data.get("paymentMethod") or "").strip()[:32],
+        "reason": str(payment_data.get("reason") or "").strip()[:255],
+        "reference_number": str(payment_data.get("referenceNumber") or "").strip()[:120],
+        "receiver_reference_id": str(payment_data.get("receiverReferenceId") or "").strip()[:120],
+        "authentication_code": str(payment_data.get("authenticationCode") or "").strip()[:120],
+    }
+    pix_key = _find_pix_key(payment_data) or _find_pix_key(payload)
+    if pix_key:
+        details["pix_key"] = pix_key
+    return {
+        key: value
+        for key, value in details.items()
+        if value not in (None, "", {}, [])
+    }
+
+
 def _payment_counterparty_hint(
     payload: dict[str, Any],
     direction: str,
@@ -964,6 +1067,66 @@ def _resolve_pluggy_counterparty(transaction: Transaction, payload: dict[str, An
         )
     else:
         resolve_transaction_counterparty(transaction)
+
+
+def _pluggy_category_values(payload: dict[str, Any]) -> tuple[str, str]:
+    merchant = payload.get("merchant") if isinstance(payload.get("merchant"), dict) else {}
+    name = " ".join(
+        str(payload.get("category") or merchant.get("category") or "").split()
+    )[:120]
+    category_id = str(payload.get("categoryId") or "").strip()[:64]
+    return name, category_id
+
+
+def _local_category_for_pluggy(name: str) -> Category | None:
+    if not name:
+        return None
+    existing = Category.objects.filter(name__iexact=name).order_by("pk").first()
+    if existing is not None:
+        return existing
+    return Category.objects.create(
+        name=name,
+        category_type=Category.CategoryType.BOTH,
+        is_active=True,
+    )
+
+
+def _sync_pluggy_category(transaction: Transaction, payload: dict[str, Any]) -> None:
+    """Preserva a categoria da fonte e sugere uma categoria local.
+
+    A categoria retornada pela Pluggy continua registrada mesmo que o usuário
+    escolha outra categoria no Financeiro OFX. Sincronizações futuras nunca
+    sobrescrevem uma decisão manual.
+    """
+    source_name, source_id = _pluggy_category_values(payload)
+    changed: list[str] = []
+
+    if transaction.source_category_name != source_name:
+        transaction.source_category_name = source_name
+        changed.append("source_category_name")
+    if transaction.source_category_id != source_id:
+        transaction.source_category_id = source_id
+        changed.append("source_category_id")
+
+    auto_owned = (
+        transaction.category_assignment_source == Transaction.CategoryAssignmentSource.PLUGGY
+        or transaction.category_id is None
+    )
+    if (
+        source_name
+        and transaction.category_assignment_source != Transaction.CategoryAssignmentSource.MANUAL
+        and auto_owned
+    ):
+        local_category = _local_category_for_pluggy(source_name)
+        if local_category is not None and transaction.category_id != local_category.pk:
+            transaction.category = local_category
+            changed.append("category")
+        if transaction.category_assignment_source != Transaction.CategoryAssignmentSource.PLUGGY:
+            transaction.category_assignment_source = Transaction.CategoryAssignmentSource.PLUGGY
+            changed.append("category_assignment_source")
+
+    if changed:
+        transaction.save(update_fields=[*dict.fromkeys(changed), "updated_at"])
 
 
 def _conflict_fields(transaction: Transaction, expected) -> list[str]:
@@ -1066,8 +1229,19 @@ def sync_account_transactions(
                 stats["conflicts"] += 1
             else:
                 stats["existing"] += 1
+
+            normalized_payment = _normalized_payment_details(payload)
+            if normalized_payment and link.transaction.payment_details != normalized_payment:
+                link.transaction.payment_details = normalized_payment
+                link.transaction.save(update_fields=["payment_details", "updated_at"])
+            _sync_pluggy_category(link.transaction, payload)
             if not link.transaction.counterparty_id:
                 _resolve_pluggy_counterparty(link.transaction, payload)
+            apply_internal_balance_classification(
+                link.transaction,
+                pluggy_account=pluggy_account,
+                payload=payload,
+            )
             continue
 
         posted_at, amount, direction, description = expected
@@ -1083,7 +1257,12 @@ def sync_account_transactions(
         if transaction is not None:
             stats["existing"] += 1
         else:
-            tx_type = _transaction_type(description, str(payload.get("category") or ""))
+            tx_type = _transaction_type(
+                description,
+                str(payload.get("category") or ""),
+                str(payload.get("operationType") or ""),
+                str(payload.get("operationTypeAdditionalInfo") or ""),
+            )
             signed_amount = amount if direction == Transaction.Direction.CREDIT else -amount
             fingerprint = build_fingerprint(
                 account_id=pluggy_account.local_account_id,
@@ -1110,10 +1289,17 @@ def sync_account_transactions(
                 fingerprint=fingerprint,
                 fingerprint_version=1,
                 raw_data={"provider": "PLUGGY", "pluggy": _remote_canonical(payload)},
+                payment_details=_normalized_payment_details(payload),
                 notes="Importado automaticamente via Pluggy / Open Finance.",
                 created_by=user,
             )
+            _sync_pluggy_category(transaction, payload)
             _resolve_pluggy_counterparty(transaction, payload)
+            apply_internal_balance_classification(
+                transaction,
+                pluggy_account=pluggy_account,
+                payload=payload,
+            )
             created_ids.append(transaction.pk)
             stats["created"] += 1
 

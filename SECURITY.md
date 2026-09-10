@@ -103,7 +103,7 @@ implementado nesta etapa deve ser usado para recursos da própria conta.
 ## Proteções implementadas
 
 - autenticação Django;
-- senha mínima de 12 caracteres;
+- senha mínima de 8 caracteres, mantendo bloqueio de senhas comuns, totalmente numéricas e excessivamente similares aos dados do usuário;
 - limitação persistente de tentativas por usuário e por IP;
 - mensagens genéricas no bloqueio de login;
 - expiração de sessão por inatividade;
@@ -218,6 +218,12 @@ decisões de acesso negadas para usuários autenticados também são auditadas.
 
 Desativar um usuário invalida suas sessões ativas. Redefinição administrativa
 de senha também encerra sessões antigas do usuário afetado.
+
+O administrador inicial é criado pelo próprio site quando não existe nenhum
+administrador ativo. Esse bootstrap é deliberadamente mais restrito: só pode ser
+concluído a partir do próprio computador (`127.0.0.1`/loopback), mesmo que o sistema
+esteja acessível pela LAN. A rota fecha automaticamente assim que um administrador
+ativo passa a existir.
 
 Gerenciamento de usuários (criar, alterar perfil/estado e redefinir senha) exige
 `localhost` ou HTTPS, além da reautenticação pela senha do administrador. O modo LAN

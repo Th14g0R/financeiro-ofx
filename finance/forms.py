@@ -494,6 +494,108 @@ class DuplicateReviewForm(forms.Form):
         return cleaned
 
 
+class DuplicateGroupReviewForm(forms.Form):
+    ACTIONS = [
+        ("keep_all", "Manter todas as movimentações do grupo"),
+        ("keep_one", "Manter somente a movimentação escolhida"),
+        ("merge_one", "Mesclar metadados na escolhida e desconsiderar as demais"),
+    ]
+
+    action = forms.ChoiceField(
+        label="Decisão do grupo",
+        choices=ACTIONS,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    canonical_transaction_id = forms.IntegerField(
+        label="Movimentação a manter",
+        required=False,
+        min_value=1,
+    )
+    current_password = forms.CharField(
+        label="Senha atual",
+        strip=False,
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={"class": "form-control", "autocomplete": "current-password"},
+        ),
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_current_password(self):
+        password = self.cleaned_data.get("current_password") or ""
+        if (
+            self.user is None
+            or not self.user.is_authenticated
+            or not self.user.check_password(password)
+        ):
+            raise forms.ValidationError("A senha atual não confere.")
+        return password
+
+    def clean(self):
+        cleaned = super().clean()
+        if cleaned.get("action") in {"keep_one", "merge_one"} and not cleaned.get(
+            "canonical_transaction_id"
+        ):
+            self.add_error(
+                "canonical_transaction_id",
+                "Escolha qual movimentação deve permanecer como canônica.",
+            )
+        return cleaned
+
+
+class DuplicateGroupBulkReviewForm(forms.Form):
+    ACTIONS = [
+        ("keep_all", "Manter todas as movimentações de cada grupo"),
+        ("keep_first", "Manter a primeira (somente grupos com 2 movimentos)"),
+        ("keep_second", "Manter a segunda (somente grupos com 2 movimentos)"),
+        ("merge_first", "Mesclar na primeira (somente grupos com 2 movimentos)"),
+        ("merge_second", "Mesclar na segunda (somente grupos com 2 movimentos)"),
+        ("prefer_pluggy", "Manter Pluggy quando houver uma única movimentação Pluggy"),
+        ("merge_pluggy", "Mesclar no Pluggy quando houver uma única movimentação Pluggy"),
+        ("prefer_ofx", "Manter OFX quando houver uma única movimentação OFX"),
+        ("merge_ofx", "Mesclar no OFX quando houver uma única movimentação OFX"),
+    ]
+
+    action = forms.ChoiceField(
+        label="Decisão em lote",
+        choices=ACTIONS,
+        widget=forms.Select(attrs={"class": "form-select"}),
+    )
+    current_password = forms.CharField(
+        label="Senha atual",
+        strip=False,
+        widget=forms.PasswordInput(
+            render_value=False,
+            attrs={
+                "class": "form-control",
+                "autocomplete": "current-password",
+                "placeholder": "Senha atual para confirmar",
+            },
+        ),
+    )
+    apply_all_filtered = forms.BooleanField(
+        label="Aplicar a todos os grupos filtrados",
+        required=False,
+    )
+
+    def __init__(self, *args, user=None, **kwargs):
+        self.user = user
+        super().__init__(*args, **kwargs)
+
+    def clean_current_password(self):
+        password = self.cleaned_data.get("current_password") or ""
+        if (
+            self.user is None
+            or not self.user.is_authenticated
+            or not self.user.check_password(password)
+        ):
+            raise forms.ValidationError("A senha atual não confere.")
+        return password
+
+
 class DuplicateBulkReviewForm(forms.Form):
     action = forms.ChoiceField(
         label="Decisão em lote",

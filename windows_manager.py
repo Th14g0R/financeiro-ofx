@@ -2361,8 +2361,9 @@ class ManagerApp(tk.Tk):
                 "Usuários / recuperação",
                 (
                     "Nenhum usuário foi encontrado no banco local.\n\n"
-                    "Crie o primeiro administrador com o processo "
-                    "de instalação/superusuário."
+                    "Abra http://127.0.0.1:8000/ neste computador. "
+                    "O próprio Financeiro OFX exibirá o cadastro "
+                    "do administrador inicial."
                 ),
             )
             return
