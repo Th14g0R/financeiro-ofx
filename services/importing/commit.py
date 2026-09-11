@@ -404,6 +404,11 @@ def refresh_batch_status(batch: ImportBatch):
         statement__import_file__batch=batch
     )
 
+    pending_file_ids = set(items.filter(
+        commit_status=ImportItem.CommitStatus.PENDING,
+        is_excluded=False,
+    ).values_list("statement__import_file_id", flat=True).distinct())
+
     for import_file in batch.files.all():
         if import_file.status in {
             ImportFile.Status.FAILED,
@@ -411,11 +416,7 @@ def refresh_batch_status(batch: ImportBatch):
         }:
             continue
 
-        has_pending = items.filter(
-            statement__import_file=import_file,
-            commit_status=ImportItem.CommitStatus.PENDING,
-            is_excluded=False,
-        ).exists()
+        has_pending = import_file.pk in pending_file_ids
 
         import_file.status = (
             ImportFile.Status.PARTIAL
@@ -429,10 +430,7 @@ def refresh_batch_status(batch: ImportBatch):
             ]
         )
 
-    has_pending_batch = items.filter(
-        commit_status=ImportItem.CommitStatus.PENDING,
-        is_excluded=False,
-    ).exists()
+    has_pending_batch = bool(pending_file_ids)
 
     batch.status = (
         ImportBatch.Status.PARTIAL

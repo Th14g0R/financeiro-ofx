@@ -1,4 +1,3 @@
-from collections import Counter
 from dataclasses import replace
 from datetime import date
 from urllib.parse import urlencode
@@ -35,7 +34,6 @@ from .forms import CounterpartyAliasForm
 from .forms import CounterpartyMergeConfirmForm
 from .forms import CounterpartyMergeSelectionForm
 from .forms import TransactionForm
-from .forms import DuplicateBulkReviewForm
 from .forms import DuplicateGroupBulkReviewForm
 from .forms import DuplicateGroupReviewForm
 from .forms import DuplicateReviewForm
@@ -1424,7 +1422,6 @@ def _counterparty_merge_context(
         CounterpartyAlias.AliasType.NAME,
         CounterpartyAlias.AliasType.PIX,
         CounterpartyAlias.AliasType.TAX_ID,
-        CounterpartyAlias.AliasType.BANK_ID,
     }
 
     for item in items:
@@ -1641,11 +1638,10 @@ def counterparty_merge_apply(
 
 @login_required
 def counterparty_detail(request, pk):
-    counterparty = get_object_or_404(
-        Counterparty,
-        pk=pk,
-        is_active=True,
-    )
+    counterparty = get_object_or_404(Counterparty, pk=pk)
+    if not counterparty.is_active:
+        messages.info(request, "Este cadastro foi desativado após a reorganização. Consulte as pessoas atuais abaixo.")
+        return redirect("finance:counterparty-list")
 
     transactions = (
         Transaction.objects.select_related(
@@ -1764,10 +1760,13 @@ def counterparty_detail(request, pk):
     else:
         alias_form = CounterpartyAliasForm()
 
+    page = Paginator(transactions, 50).get_page(request.GET.get("page"))
     context = {
         "counterparty": counterparty,
-        "transactions": transactions[:500],
-        "transaction_count": transactions.count(),
+        "transactions": page.object_list,
+        "page_obj": page,
+        "is_paginated": page.has_other_pages(),
+        "transaction_count": page.paginator.count,
         "total_credit": total_credit,
         "total_debit": total_debit,
         "aliases": counterparty.aliases.order_by(
@@ -1775,16 +1774,18 @@ def counterparty_detail(request, pk):
             "alias",
         ),
         "identity_aliases": counterparty.aliases.exclude(
-            alias_type=(
-                CounterpartyAlias.AliasType.BANK_TEXT
+            alias_type__in=(
+                CounterpartyAlias.AliasType.BANK_TEXT,
+                CounterpartyAlias.AliasType.BANK_ID,
             )
         ).order_by(
             "alias_type",
             "alias",
         ),
         "bank_text_aliases": counterparty.aliases.filter(
-            alias_type=(
-                CounterpartyAlias.AliasType.BANK_TEXT
+            alias_type__in=(
+                CounterpartyAlias.AliasType.BANK_TEXT,
+                CounterpartyAlias.AliasType.BANK_ID,
             )
         ).order_by(
             "-created_at",

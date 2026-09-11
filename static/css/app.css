@@ -46,9 +46,9 @@ body {
 
 .chart-container {
     position: relative;
-    min-height: 22rem;
 }
 
+.chart-container,
 .chart-container-sm {
     min-height: 22rem;
 }
@@ -109,4 +109,80 @@ body {
     color: var(--bs-secondary-color);
     font-size: 0.8em;
     margin-left: 0.25rem;
+}
+
+/* Consistent controls and readable long bank references at every breakpoint. */
+:root {
+    --bs-secondary-color: #586474;
+    --bs-link-color: #0756bd;
+    --bs-link-color-rgb: 7, 86, 189;
+}
+
+.row > *,
+.d-flex > * {
+    min-width: 0;
+}
+
+.form-control,
+.form-select,
+.btn {
+    min-height: 2.375rem;
+}
+
+.form-control-sm,
+.form-select-sm,
+.btn-sm {
+    min-height: 2rem;
+}
+
+.form-control:focus,
+.form-select:focus,
+.btn:focus-visible {
+    outline: 2px solid #0756bd;
+    outline-offset: 2px;
+}
+
+.transaction-description,
+.transaction-fitid,
+.list-group-item,
+h1 {
+    overflow-wrap: anywhere;
+}
+
+.transaction-fitid {
+    min-width: 9rem;
+    max-width: 15rem;
+}
+
+.pagination {
+    flex-wrap: wrap;
+    row-gap: 0.5rem;
+}
+
+@media (max-width: 575.98px) {
+    .container-fluid.px-4 {
+        padding-right: 1rem !important;
+        padding-left: 1rem !important;
+    }
+
+    .transaction-description {
+        min-width: 13rem;
+    }
+}
+
+.navbar-nav {
+    flex-wrap: wrap;
+}
+
+.navbar-actions {
+    flex-shrink: 0;
+}
+
+.navbar-actions .btn {
+    white-space: nowrap;
+}
+
+.navbar-actions a {
+    max-width: 12rem;
+    overflow-wrap: anywhere;
 }

@@ -76,6 +76,7 @@ class CounterpartyCandidate:
     masked_identifier: str
     bank_identifier: str
     source: str
+    tax_id: str = ""
 
 
 def normalize_identity_text(value: str) -> str:
@@ -477,60 +478,47 @@ def extract_counterparty_candidate(
 def _counterparty_identifiers(
     counterparty: Counterparty,
 ) -> set[str]:
-    return set(
-        counterparty.aliases.filter(
-            alias_type__in=[
-                CounterpartyAlias.AliasType.PIX,
-                CounterpartyAlias.AliasType.BANK_ID,
-                CounterpartyAlias.AliasType.TAX_ID,
-            ]
-        ).values_list(
-            "normalized_alias",
-            flat=True,
-        )
-    )
+    identifiers = {
+        alias.normalized_alias
+        for alias in counterparty.aliases.all()
+        if alias.alias_type in {
+            CounterpartyAlias.AliasType.PIX,
+            CounterpartyAlias.AliasType.TAX_ID,
+        }
+    }
+    if counterparty.tax_id:
+        identifiers.add(counterparty.tax_id)
+    return identifiers
 
 
-def _candidate_identifiers(
-    candidate: CounterpartyCandidate,
-) -> set[str]:
-    result = set()
-
-    if candidate.masked_identifier:
-        normalized = normalize_identity_text(
-            candidate.masked_identifier
-        )
-        if normalized:
-            result.add(normalized)
-
-    if candidate.bank_identifier:
-        normalized = normalize_identity_text(
-            candidate.bank_identifier
-        )
-        if normalized:
-            result.add(normalized)
-
-    return result
+def _documents_conflict(left: Counterparty, right: Counterparty) -> bool:
+    left_documents = _full_tax_ids(left)
+    right_documents = _full_tax_ids(right)
+    return bool(left_documents and right_documents and left_documents != right_documents)
 
 
 def _identifiers_conflict(
     counterparty: Counterparty,
     candidate: CounterpartyCandidate,
 ) -> bool:
-    existing = _counterparty_identifiers(
-        counterparty
-    )
-    incoming = _candidate_identifiers(
-        candidate
-    )
+    # ISPB identifies an institution, never an individual. Compare like kinds
+    # of personal evidence; a masked document cannot contradict a full one.
+    aliases = list(counterparty.aliases.all())
+    documents = {
+        _digits(alias.alias) for alias in aliases
+        if alias.alias_type == CounterpartyAlias.AliasType.TAX_ID
+    }
+    if counterparty.tax_id:
+        documents.add(counterparty.tax_id)
+    if candidate.tax_id and documents and documents != {candidate.tax_id}:
+        return True
+    masked = {
+        alias.normalized_alias for alias in aliases
+        if alias.alias_type == CounterpartyAlias.AliasType.PIX
+    }
+    return bool(candidate.masked_identifier and masked and
+                normalize_identity_text(candidate.masked_identifier) not in masked)
 
-    return bool(
-        existing
-        and incoming
-        and existing.isdisjoint(
-            incoming
-        )
-    )
 
 
 def truncated_name_equivalent(
@@ -619,14 +607,19 @@ def _find_truncated_match(
     candidate: CounterpartyCandidate,
 ) -> Counterparty | None:
     possible = []
+    prefix = candidate.normalized_name.split()[0] + " "
 
     queryset = (
         Counterparty.objects.filter(
             is_active=True
         )
-        .prefetch_related(
-            "aliases"
+        .filter(
+            Q(normalized_name__startswith=prefix)
+            | Q(aliases__normalized_alias__startswith=prefix,
+                aliases__alias_type=CounterpartyAlias.AliasType.NAME)
         )
+        .distinct()
+        .prefetch_related("aliases")
         .order_by("id")
     )
 
@@ -710,94 +703,20 @@ def _richer_display_name(
 def _find_counterparty_for_candidate(
     candidate: CounterpartyCandidate,
 ) -> Counterparty | None:
-    normalized_identifiers = []
-
-    for raw_identifier, alias_type in [
-        (
-            candidate.masked_identifier,
-            CounterpartyAlias.AliasType.PIX,
-        ),
-        (
-            candidate.bank_identifier,
-            CounterpartyAlias.AliasType.BANK_ID,
-        ),
-    ]:
-        normalized = normalize_identity_text(
-            raw_identifier
-        )
-
-        if normalized:
-            normalized_identifiers.append(
-                (
-                    normalized,
-                    alias_type,
-                )
-            )
-
-    for normalized, alias_type in normalized_identifiers:
-        matches = list(
-            CounterpartyAlias.objects.select_related(
-                "counterparty"
-            )
-            .filter(
-                normalized_alias=normalized,
-                alias_type=alias_type,
-                counterparty__is_active=True,
-            )
-            .order_by("id")[:2]
-        )
-
-        if len(matches) == 1:
-            return matches[0].counterparty
-
-    name_alias_matches = list(
-        CounterpartyAlias.objects.select_related(
-            "counterparty"
-        )
-        .filter(
-            normalized_alias=(
-                candidate.normalized_name
-            ),
-            alias_type=(
-                CounterpartyAlias.AliasType.NAME
-            ),
-            counterparty__is_active=True,
-        )
-        .order_by("id")[:2]
-    )
-
-    if len(name_alias_matches) == 1:
-        counterparty = (
-            name_alias_matches[0].counterparty
-        )
-
-        if not _identifiers_conflict(
-            counterparty,
-            candidate,
-        ):
-            return counterparty
-
-    direct_matches = list(
-        Counterparty.objects.filter(
-            normalized_name=(
-                candidate.normalized_name
-            ),
-            is_active=True,
-        ).order_by("id")[:2]
-    )
-
-    if len(direct_matches) == 1:
-        counterparty = direct_matches[0]
-
-        if not _identifiers_conflict(
-            counterparty,
-            candidate,
-        ):
-            return counterparty
-
-    return _find_truncated_match(
-        candidate
-    )
+    matches = Counterparty.objects.filter(is_active=True).filter(
+        Q(normalized_name=candidate.normalized_name)
+        | Q(aliases__normalized_alias=candidate.normalized_name,
+            aliases__alias_type=CounterpartyAlias.AliasType.NAME)
+    ).distinct().prefetch_related("aliases").order_by("id")
+    compatible = []
+    for person in matches:
+        if not _identifiers_conflict(person, candidate):
+            compatible.append(person)
+            if len(compatible) > 1:
+                return None
+    if compatible:
+        return compatible[0]
+    return _find_truncated_match(candidate)
 
 
 def _ensure_alias(
@@ -921,6 +840,18 @@ def resolve_transaction_counterparty(
     ):
         return transaction.counterparty
 
+    details = transaction.payment_details or {}
+    participant = details.get(
+        "receiver" if transaction.direction == Transaction.Direction.DEBIT else "payer"
+    ) if isinstance(details, dict) else None
+    if isinstance(participant, dict) and sanitize_counterparty_name(participant.get("name", "")).name:
+        return resolve_transaction_counterparty_from_hint(
+            transaction,
+            name=participant["name"],
+            tax_id=participant.get("document_number", ""),
+            bank_identifier=participant.get("routing_number_ispb", ""),
+        )
+
     candidate = extract_counterparty_candidate(
         transaction.raw_description,
         transaction_type=(
@@ -999,21 +930,26 @@ def resolve_transaction_counterparty_from_hint(
     if not sanitized.name:
         return resolve_transaction_counterparty(transaction)
 
+    digits = _digits(tax_id)
     candidate = CounterpartyCandidate(
         name=sanitized.name,
         normalized_name=sanitized.normalized_name,
         masked_identifier="",
         bank_identifier=(bank_identifier or sanitized.bank_identifier or "").strip(),
         source=source,
+        tax_id=digits if len(digits) in {11, 14} else "",
     )
-    digits = _digits(tax_id)
 
     # CPF/CNPJ completo é um identificador mais forte que o nome. Isso evita
     # criar duas Pessoas quando o banco usa grafias diferentes para a mesma
     # contraparte em OFX/PDF e paymentData da Pluggy.
     counterparty = None
     if len(digits) in {11, 14}:
-        counterparty = Counterparty.objects.filter(tax_id=digits).first()
+        document_matches = list(Counterparty.objects.filter(
+            tax_id=digits, is_active=True
+        ).prefetch_related("aliases")[:2])
+        if len(document_matches) == 1 and not _identifiers_conflict(document_matches[0], candidate):
+            counterparty = document_matches[0]
     if counterparty is None:
         counterparty = _find_counterparty_for_candidate(candidate)
     if counterparty is None:
@@ -1023,7 +959,7 @@ def resolve_transaction_counterparty_from_hint(
             kind=infer_counterparty_kind(candidate.name),
             is_active=True,
         )
-        if len(digits) in {11, 14} and not Counterparty.objects.filter(tax_id=digits).exists():
+        if len(digits) in {11, 14}:
             counterparty.tax_id = digits
         counterparty.full_clean()
         counterparty.save()
@@ -1192,64 +1128,6 @@ def normalize_existing_counterparties() -> dict[str, int]:
                 ),
             )
 
-    # 2) Mescla identificadores bancários exatos. Preferimos o nome mais rico.
-    bank_id_aliases = (
-        CounterpartyAlias.objects.filter(
-            alias_type=(
-                CounterpartyAlias.AliasType.BANK_ID
-            ),
-            counterparty__is_active=True,
-        )
-        .select_related("counterparty")
-        .order_by(
-            "normalized_alias",
-            "counterparty_id",
-        )
-    )
-
-    groups: dict[str, list[Counterparty]] = {}
-
-    for alias in bank_id_aliases:
-        groups.setdefault(
-            alias.normalized_alias,
-            [],
-        ).append(
-            alias.counterparty
-        )
-
-    for _identifier, group in groups.items():
-        unique = {
-            item.pk: item
-            for item in group
-            if item.is_active
-        }
-
-        if len(unique) <= 1:
-            continue
-
-        candidates = list(
-            unique.values()
-        )
-        candidates.sort(
-            key=lambda item: (
-                len(
-                    normalize_identity_text(
-                        item.display_name
-                    )
-                ),
-                -item.pk,
-            ),
-            reverse=True,
-        )
-        target = candidates[0]
-
-        for source in candidates[1:]:
-            _merge_counterparty(
-                source=source,
-                target=target,
-            )
-            counters["merged"] += 1
-
     # 3) Mescla nomes normalizados exatamente iguais.
     duplicates = (
         Counterparty.objects.filter(
@@ -1291,6 +1169,8 @@ def normalize_existing_counterparties() -> dict[str, int]:
 
             # Homônimos com identificadores incompatíveis permanecem
             # separados, mesmo quando o nome normalizado é idêntico.
+            if _documents_conflict(target, source):
+                continue
             if (
                 target_ids
                 and source_ids
@@ -1356,6 +1236,8 @@ def merge_truncated_counterparties() -> int:
                 right
             )
 
+            if _documents_conflict(left, right):
+                continue
             if (
                 left_ids
                 and right_ids
@@ -1488,11 +1370,9 @@ def _full_tax_ids(
         }:
             result.add(digits)
 
-    for alias in counterparty.aliases.filter(
-        alias_type=(
-            CounterpartyAlias.AliasType.TAX_ID
-        )
-    ):
+    for alias in counterparty.aliases.all():
+        if alias.alias_type != CounterpartyAlias.AliasType.TAX_ID:
+            continue
         digits = _digits(
             alias.alias
         )
@@ -1834,7 +1714,29 @@ def merge_counterparties_manually(
     )
 
 @db_transaction.atomic
-def rebuild_counterparty_links() -> dict[str, int]:
+def rebuild_counterparty_links(*, repair_bank_groups: bool = False) -> dict[str, int]:
+    quarantined = 0
+    if repair_bank_groups:
+        # Preserve historical aliases, excluding contaminated groups from matching.
+        suspects = Counterparty.objects.filter(
+            is_active=True, aliases__alias_type=CounterpartyAlias.AliasType.BANK_ID
+        ).distinct().prefetch_related("aliases")
+        for person in suspects:
+            names = {person.normalized_name}
+            documents = {person.tax_id} if person.tax_id else set()
+            for alias in person.aliases.all():
+                if alias.alias_type == CounterpartyAlias.AliasType.NAME:
+                    names.add(alias.normalized_alias)
+                elif alias.alias_type == CounterpartyAlias.AliasType.TAX_ID:
+                    documents.add(_digits(alias.alias))
+            incompatible = any(
+                name != person.normalized_name and not truncated_name_equivalent(name, person.normalized_name)
+                for name in names
+            )
+            if len(documents) > 1 or (incompatible and not documents):
+                person.is_active = False
+                person.save(update_fields=["is_active", "updated_at"])
+                quarantined += 1
     normalized = normalize_existing_counterparties()
 
     queryset = (
@@ -1890,6 +1792,7 @@ def rebuild_counterparty_links() -> dict[str, int]:
     )
 
     return {
+        "quarantined": quarantined,
         "total": total,
         "linked": linked,
         "reassigned": reassigned,

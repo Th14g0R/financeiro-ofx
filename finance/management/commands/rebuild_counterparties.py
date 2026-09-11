@@ -9,8 +9,14 @@ class Command(BaseCommand):
         "e cria/vincula contrapartes usando os padrões atuais de PIX/transferência."
     )
 
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--repair-bank-groups", action="store_true",
+            help="Isola agrupamentos por ISPB e refaz os vínculos pelos dados originais.",
+        )
+
     def handle(self, *args, **options):
-        result = rebuild_counterparty_links()
+        result = rebuild_counterparty_links(repair_bank_groups=options["repair_bank_groups"])
 
         self.stdout.write(
             self.style.SUCCESS(
@@ -22,6 +28,7 @@ class Command(BaseCommand):
                     f"{result['renamed']} nome(s) legado(s) saneado(s); "
                     f"{result['merged']} duplicidade(s) exata(s)/por identificador mesclada(s); "
                     f"{result['truncated_merged']} nome(s) truncado(s) mesclado(s); "
+                    f"{result['quarantined']} agrupamento(s) bancário(s) isolado(s); "
                     f"{result['orphaned']} cadastro(s) órfão(s) desativado(s)."
                 )
             )

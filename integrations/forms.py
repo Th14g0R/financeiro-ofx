@@ -6,7 +6,6 @@ from django.conf import settings
 from finance.models import Account
 
 from .models import BankIntegration
-from .models import PluggyAccount
 from .models import PluggyConfiguration
 
 

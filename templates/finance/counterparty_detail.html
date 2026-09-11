@@ -189,7 +189,7 @@
                                     {{ transaction.description }}
                                 </td>
 
-                                <td class="small">
+                                <td class="small transaction-fitid">
                                     {{ transaction.fitid|default:"—" }}
                                 </td>
 
@@ -210,6 +210,7 @@
                         </tbody>
                     </table>
                 </div>
+                {% include "finance/includes/pagination.html" %}
             </div>
         </div>
 
@@ -237,12 +238,11 @@
 
             <div class="card border-0 shadow-sm mb-4">
                 <div class="card-header bg-white fw-semibold">
-                    Textos bancários vinculados
+                    Referências bancárias
                 </div>
 
                 <div class="card-body py-2 small text-secondary">
-                    Evidências originais usadas para reconhecer esta contraparte.
-                    Não são tratadas como nomes alternativos.
+                    Textos e códigos da instituição de origem. ISPB e códigos de banco não identificam a pessoa.
                 </div>
 
                 <ul class="list-group list-group-flush">

@@ -15,7 +15,6 @@ from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
 
-from finance.models import Account
 from finance.models import Bank
 from finance.models import InternalTransfer
 from finance.models import Transaction
