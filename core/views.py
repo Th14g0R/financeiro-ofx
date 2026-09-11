@@ -865,6 +865,40 @@ def home(request):
         )
     )
 
+    def build_category_chart(direction):
+        rows = list(
+            external_transactions.filter(direction=direction)
+            .values("category_id", "category__name")
+            .annotate(total=Sum("amount"))
+            .order_by("-total", "category__name")[:12]
+        )
+
+        labels = []
+        values = []
+        drilldown_urls = []
+        for row in rows:
+            category_id = row["category_id"]
+            labels.append(row["category__name"] or "Sem categoria")
+            values.append(float(row["total"]))
+
+            query = dict(external_transaction_query)
+            query["direction"] = direction
+            query["category"] = (
+                str(category_id) if category_id is not None else "uncategorized"
+            )
+            drilldown_urls.append(
+                reverse("finance:transaction-list") + "?" + urlencode(query)
+            )
+
+        return {
+            "labels": labels,
+            "values": values,
+            "drilldown_urls": drilldown_urls,
+        }
+
+    category_expense_chart = build_category_chart(Transaction.Direction.DEBIT)
+    category_income_chart = build_category_chart(Transaction.Direction.CREDIT)
+
     internal_transfer_url = (
         reverse(
             "finance:internal-transfer-list"
@@ -955,6 +989,8 @@ def home(request):
         "expense_chart_title": (
             expense_chart_title
         ),
+        "category_expense_chart": category_expense_chart,
+        "category_income_chart": category_income_chart,
         "available_banks": (
             Bank.objects.filter(
                 is_active=True,

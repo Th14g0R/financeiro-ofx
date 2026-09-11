@@ -1252,7 +1252,7 @@ class PluggyTransactionCategoryTests(TestCase):
         sync_account_transactions(self.remote, user=self.user)
 
         tx = Transaction.objects.get(fitid="PLUGGY-PROVIDER:provider-category-1")
-        self.assertEqual(tx.category.name, "Shopping")
+        self.assertEqual(tx.category.name, "Compras")
         self.assertEqual(tx.source_category_name, "Shopping")
         self.assertEqual(tx.source_category_id, "07000000")
         self.assertEqual(

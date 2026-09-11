@@ -542,6 +542,52 @@
 
     </div>
 
+    <div class="row g-4 mb-4">
+        <div class="col-12 col-xl-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-0 pt-4 px-4">
+                    <div class="fw-semibold">Saídas externas por categoria — {{ period_label }}</div>
+                    <div class="small text-secondary mt-1">
+                        Até 12 categorias com maior volume. Clique em uma barra para abrir as movimentações do recorte.
+                    </div>
+                </div>
+                <div class="card-body p-4">
+                    {% if category_expense_chart.values %}
+                        <div class="chart-container sensitive-chart">
+                            <canvas id="categoryExpenseChart"></canvas>
+                        </div>
+                    {% else %}
+                        <div class="text-secondary py-5 text-center">
+                            Não há saídas externas categorizadas no período selecionado.
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-xl-6">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-header bg-white border-0 pt-4 px-4">
+                    <div class="fw-semibold">Entradas externas por categoria — {{ period_label }}</div>
+                    <div class="small text-secondary mt-1">
+                        Até 12 categorias com maior volume. Clique em uma barra para abrir as movimentações do recorte.
+                    </div>
+                </div>
+                <div class="card-body p-4">
+                    {% if category_income_chart.values %}
+                        <div class="chart-container sensitive-chart">
+                            <canvas id="categoryIncomeChart"></canvas>
+                        </div>
+                    {% else %}
+                        <div class="text-secondary py-5 text-center">
+                            Não há entradas externas categorizadas no período selecionado.
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="card border-0 shadow-sm">
         <div class="card-body p-4">
             <div class="d-flex flex-wrap gap-2">
@@ -604,6 +650,8 @@
     class="d-none"
     data-period-chart="{{ period_chart|json_b64 }}"
     data-expense-chart="{{ expense_chart|json_b64 }}"
+    data-category-expense-chart="{{ category_expense_chart|json_b64 }}"
+    data-category-income-chart="{{ category_income_chart|json_b64 }}"
 ></div>
 
 {% endblock %}
@@ -615,5 +663,5 @@
     crossorigin="anonymous"
 ></script>
 
-<script src="{% static 'js/dashboard.js' %}"></script>
+<script src="{% static 'js/dashboard.js' %}?v=10.9.11"></script>
 {% endblock %}

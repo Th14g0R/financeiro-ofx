@@ -426,7 +426,9 @@ class TransactionListView(LoginRequiredMixin, ListView):
         if source_type in valid_sources:
             queryset = queryset.filter(source_type=source_type)
 
-        if category_id.isdigit():
+        if category_id == "uncategorized":
+            queryset = queryset.filter(category__isnull=True)
+        elif category_id.isdigit():
             queryset = queryset.filter(category_id=int(category_id))
 
         if financial_scope == "internal_balance":

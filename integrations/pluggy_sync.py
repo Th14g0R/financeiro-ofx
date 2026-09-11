@@ -13,6 +13,7 @@ from django.db.models.deletion import ProtectedError
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from finance.category_catalog import translate_pluggy_category
 from finance.models import Account, Bank, Category, InternalTransfer, Transaction, TransactionDuplicateReview
 from services.counterparties.resolver import resolve_transaction_counterparty
 from services.counterparties.resolver import resolve_transaction_counterparty_from_hint
@@ -1079,13 +1080,17 @@ def _pluggy_category_values(payload: dict[str, Any]) -> tuple[str, str]:
 
 
 def _local_category_for_pluggy(name: str) -> Category | None:
-    if not name:
+    local_name = translate_pluggy_category(name)
+    if not local_name:
         return None
-    existing = Category.objects.filter(name__iexact=name).order_by("pk").first()
+    existing = Category.objects.filter(name__iexact=local_name).order_by("pk").first()
     if existing is not None:
+        if not existing.is_active:
+            existing.is_active = True
+            existing.save(update_fields=["is_active", "updated_at"])
         return existing
     return Category.objects.create(
-        name=name,
+        name=local_name,
         category_type=Category.CategoryType.BOTH,
         is_active=True,
     )

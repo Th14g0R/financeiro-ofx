@@ -1,7 +1,17 @@
-# Financeiro OFX — Etapa 10.9.10
+# Financeiro OFX — Etapa 10.9.11
 
+> Etapa 10.9.11: traduz as categorias Pluggy para português-BR sem perder o nome original da fonte, adiciona gráficos de entradas/saídas por categoria no Dashboard e alinha o cadastro manual de Item ID do Meu Pluggy.
 
-> Etapa 10.9.10: torna a data local obrigatória na sugestão de duplicidades, usa o horário como evidência adicional quando disponível, importa categorias retornadas pela Pluggy sem sobrescrever ajustes manuais, adiciona filtro/edição rápida de categoria no extrato e reduz a senha mínima para 8 caracteres.
+## Etapa 10.9.11 — categorias em português e gráficos por categoria
+
+- As categorias oficiais recebidas da Pluggy passam a ser apresentadas em português-BR no Financeiro OFX (por exemplo, `Transfers` → `Transferências`, `Shopping` → `Compras`, `Vehicle maintenance` → `Manutenção de veículos`).
+- `source_category_name` continua guardando o texto original da Pluggy para auditoria; apenas a categoria local e sua apresentação são traduzidas.
+- A migration `finance.0010_translate_pluggy_categories_pt_br` traduz categorias já cadastradas e consolida categorias equivalentes sem recriar movimentações.
+- Novas sincronizações Pluggy já criam/reutilizam a categoria local em português. Categorias futuras ainda não conhecidas são preservadas com o nome original em vez de serem descartadas.
+- O Dashboard ganha gráficos de **Saídas externas por categoria** e **Entradas externas por categoria**, respeitando banco e período selecionados e excluindo transferências internas/Cofrinho dos totais externos.
+- Os gráficos mostram até 12 categorias de maior volume, incluem `Sem categoria` quando aplicável e permitem clicar na barra para abrir o Extrato já filtrado por período, banco, natureza e categoria.
+- O filtro do Extrato passa a aceitar explicitamente `Sem categoria`.
+- O formulário **Registrar Item ID** do Meu Pluggy foi reorganizado para manter campo e botão alinhados na mesma linha em telas grandes e empilhados corretamente no celular.
 
 ## Etapa 10.9.10 — duplicidade por data/hora e categorias Pluggy
 

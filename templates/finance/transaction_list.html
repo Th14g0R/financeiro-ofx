@@ -134,6 +134,7 @@
                     <label for="category" class="form-label">Categoria</label>
                     <select id="category" name="category" class="form-select">
                         <option value="">Todas</option>
+                        <option value="uncategorized" {% if category_filter == "uncategorized" %}selected{% endif %}>Sem categoria</option>
                         {% for category in categories %}
                             <option
                                 value="{{ category.pk }}"
@@ -398,7 +399,7 @@
                             </form>
                             {% if transaction.source_category_name %}
                                 <div class="small text-secondary mt-1">
-                                    Origem: {{ transaction.source_category_name }}{% if transaction.source_category_id %} · {{ transaction.source_category_id }}{% endif %}
+                                    Origem Pluggy: {{ transaction.source_category_display }}{% if transaction.source_category_id %} · {{ transaction.source_category_id }}{% endif %}
                                     {% if transaction.category_assignment_source == "MANUAL" %} · ajustada manualmente{% endif %}
                                 </div>
                             {% endif %}

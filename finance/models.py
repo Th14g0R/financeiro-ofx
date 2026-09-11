@@ -10,6 +10,8 @@ from django.db import models
 from django.db.models import F
 from django.db.models import Q
 
+from .category_catalog import translate_pluggy_category
+
 
 def _normalize_identity_value(value: str) -> str:
     decomposed = unicodedata.normalize(
@@ -768,6 +770,10 @@ class Transaction(models.Model):
     @property
     def payment_pix_key(self):
         return str((self.payment_details or {}).get("pix_key") or "")
+
+    @property
+    def source_category_display(self):
+        return translate_pluggy_category(self.source_category_name)
 
     @property
     def signed_amount(self):

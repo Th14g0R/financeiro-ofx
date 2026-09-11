@@ -46,6 +46,12 @@
     const expenseData = decodeData(
         dataElement.dataset.expenseChart
     );
+    const categoryExpenseData = decodeData(
+        dataElement.dataset.categoryExpenseChart
+    );
+    const categoryIncomeData = decodeData(
+        dataElement.dataset.categoryIncomeChart
+    );
 
     const currencyFormatter =
         new Intl.NumberFormat(
@@ -242,4 +248,97 @@
             }
         );
     }
+    function renderCategoryChart(canvasId, chartData, datasetLabel) {
+        const canvas = document.getElementById(canvasId);
+        if (
+            !canvas
+            || !Array.isArray(chartData.values)
+            || !chartData.values.length
+        ) {
+            return;
+        }
+
+        const drilldownUrls = Array.isArray(chartData.drilldown_urls)
+            ? chartData.drilldown_urls
+            : [];
+        const hasDrilldown = drilldownUrls.length > 0;
+
+        if (hasDrilldown) {
+            canvas.style.cursor = "pointer";
+        }
+
+        new Chart(
+            canvas,
+            {
+                type: "bar",
+                data: {
+                    labels: chartData.labels || [],
+                    datasets: [
+                        {
+                            label: datasetLabel,
+                            data: chartData.values
+                        }
+                    ]
+                },
+                options: {
+                    indexAxis: "y",
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    onClick(event, elements) {
+                        if (!hasDrilldown || !elements || !elements.length) {
+                            return;
+                        }
+
+                        const url = drilldownUrls[elements[0].index];
+                        if (url) {
+                            window.location.href = url;
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label(context) {
+                                    return (
+                                        datasetLabel
+                                        + ": "
+                                        + currencyFormatter.format(context.parsed.x)
+                                    );
+                                },
+                                footer(items) {
+                                    return hasDrilldown && items.length
+                                        ? "Clique para abrir as movimentações desta categoria"
+                                        : "";
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            ticks: {
+                                callback(value) {
+                                    return currencyFormatter.format(value);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        );
+    }
+
+    renderCategoryChart(
+        "categoryExpenseChart",
+        categoryExpenseData,
+        "Saídas externas"
+    );
+    renderCategoryChart(
+        "categoryIncomeChart",
+        categoryIncomeData,
+        "Entradas externas"
+    );
+
 })();

@@ -247,3 +247,20 @@ um PATCH de categorização para a Pluggy; ela vale somente no Financeiro OFX.
 Use **Movimentações** para filtrar por categoria ou alterar a categoria de um lançamento
 sem liberar a edição dos demais campos financeiros. A tela de **Revisão de duplicidades**
 também aceita filtro por categoria.
+
+## Categorias em português-BR e Dashboard (10.9.11)
+
+O Financeiro OFX mantém `source_category_name` e `source_category_id` exatamente como
+foram recebidos da Pluggy, mas utiliza uma categoria local traduzida para português-BR.
+Exemplos: `Transfers` → `Transferências`, `Shopping` → `Compras` e
+`Proceeds interests and dividends` → `Rendimentos, juros e dividendos`.
+
+A tradução local não envia alteração para a Pluggy e não sobrescreve uma categoria que
+tenha sido escolhida manualmente pelo usuário. Se a Pluggy introduzir uma categoria que
+ainda não exista no catálogo local, o nome original é preservado como fallback.
+
+O Dashboard usa a categoria local para montar gráficos separados de entradas e saídas
+externas por categoria. Os gráficos respeitam o período e o banco selecionados e permitem
+abrir o Extrato filtrado clicando na barra correspondente. Transferências confirmadas entre
+contas próprias e movimentações de Cofrinho/reserva continuam fora desses gráficos externos.
+

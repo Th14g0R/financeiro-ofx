@@ -145,16 +145,18 @@
         <strong>meu.pluggy.ai</strong>. Depois use o menu do novo Item para <strong>Copiar Item ID</strong>.
       </div>
 
-      <form method="post" action="{% url 'integrations:pluggy-register-item' %}" class="row g-2 align-items-end" data-loading-form data-loading-text="Validando Item...">
+      <form method="post" action="{% url 'integrations:pluggy-register-item' %}" data-loading-form data-loading-text="Validando Item...">
         {% csrf_token %}
-        <div class="col-12 col-lg-6">
-          <label class="form-label" for="{{ item_form.item_id.id_for_label }}">{{ item_form.item_id.label }}</label>
-          {{ item_form.item_id }}
-          <div class="form-text">{{ item_form.item_id.help_text }}</div>
+        <label class="form-label" for="{{ item_form.item_id.id_for_label }}">{{ item_form.item_id.label }}</label>
+        <div class="row g-2 align-items-start">
+          <div class="col-12 col-lg-7">
+            {{ item_form.item_id }}
+          </div>
+          <div class="col-12 col-sm-auto d-grid">
+            <button class="btn btn-primary" type="submit">Registrar Item ID</button>
+          </div>
         </div>
-        <div class="col-auto">
-          <button class="btn btn-primary" type="submit">Registrar Item ID</button>
-        </div>
+        <div class="form-text">{{ item_form.item_id.help_text }}</div>
       </form>
       {% endif %}
     </div>
